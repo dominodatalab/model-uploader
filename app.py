@@ -42,8 +42,8 @@ logger = logging.getLogger(__name__)
 logging.getLogger('werkzeug').setLevel(logging.INFO)
 logging.getLogger('urllib3.connectionpool').setLevel(logging.WARNING)
 
-DOMINO_DOMAIN = os.environ.get("DOMINO_DOMAIN", "")
-DOMINO_API_KEY = os.environ.get("DOMINO_API_KEY", "")
+DOMINO_DOMAIN = os.environ.get("DOMINO_DOMAIN", "fitch.domino-eval.com")
+DOMINO_API_KEY = os.environ.get("DOMINO_USER_API_KEY", "")
 
 logger.info(f"DOMINO_DOMAIN: {DOMINO_DOMAIN}")
 logger.info(f"DOMINO_API_KEY: {'***' if DOMINO_API_KEY else 'NOT SET'}")
@@ -608,9 +608,6 @@ def safe_domino_config():
 def home():
     return render_template("index.html", DOMINO=safe_domino_config())
 
-@app.route("/original")
-def original():
-    return render_template("original_index.html", DOMINO=safe_domino_config())
 
 if __name__ == "__main__":
     # Test API connectivity on startup
