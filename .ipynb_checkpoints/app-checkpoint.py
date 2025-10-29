@@ -1,542 +1,152 @@
-# app.py
-from __future__ import annotations
-
 import os
-import re
-import io
-import json
+import hashlib
+import base64
+import uuid
 import time
 import shutil
 import logging
 import tempfile
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
-import requests
-from flask import Flask, request, jsonify
-import subprocess
-import os
-import requests
-import subprocess
-import tempfile
-import shutil
-import json
-import time
 from pathlib import Path
 from urllib.parse import urljoin
+
+import requests
+import mlflow
 from flask import Flask, render_template, request, Response, jsonify
-import logging
 
 app = Flask(__name__, static_url_path='/static')
 
-# Balanced logging - keep useful info, reduce noise
 logging.basicConfig(
-    level=logging.WARNING,
+    level=logging.INFO,
     format='%(levelname)s:%(name)s:%(message)s'
 )
 logger = logging.getLogger(__name__)
-
-# Keep werkzeug for request logs, reduce urllib3 debug spam
 logging.getLogger('werkzeug').setLevel(logging.INFO)
 logging.getLogger('urllib3.connectionpool').setLevel(logging.WARNING)
 
-DOMINO_DOMAIN = os.environ.get("DOMINO_DOMAIN", "fitch.domino-eval.com")
+DOMINO_DOMAIN = os.environ.get("DOMINO_DOMAIN", "se-demo.domino.tech")
 DOMINO_API_KEY = os.environ.get("DOMINO_USER_API_KEY", "")
 
 logger.info(f"DOMINO_DOMAIN: {DOMINO_DOMAIN}")
 logger.info(f"DOMINO_API_KEY: {'***' if DOMINO_API_KEY else 'NOT SET'}")
 
-DEFAULT_FILE_REGEX = r"\.py$"  # only scan Python files by default
-MAX_WORKERS = int(os.environ.get("SEC_SCAN_MAX_WORKERS", "16"))
-DEFAULT_SEMGREP_CONFIG = os.environ.get("SEMGREP_CONFIG", "p/default")
 
-# ─────────────────────────────── HTTP Helpers ────────────────────────────────
-class DominoApiError(RuntimeError):
-    pass
+def domino_short_id(length: int = 8) -> str:
+    """Generate a short ID based on Domino user and project."""
+    def short_fallback():
+        return base64.urlsafe_b64encode(uuid.uuid4().bytes).decode("utf-8").rstrip("=")[:length]
 
-class DominoClient:
-    def __init__(self, base: str, api_key: str, timeout: int = 30):
-        if not base or not api_key:
-            raise DominoApiError("Missing DOMINO_DOMAIN or DOMINO_API_KEY")
-        self.base = base.rstrip("/")
-        self.timeout = timeout
-        self.s = requests.Session()
-        self.s.headers.update({
-            "X-Domino-Api-Key": api_key,
-            "Accept": "application/json",
-            "User-Agent": "domino-secscan/1.0",
-        })
-
-    def _url(self, path: str) -> str:
-        return f"{self.base}{path}"
-
-    def get_json(self, path: str, params: Optional[dict] = None) -> dict:
-        url = self._url(path)
-        r = self.s.get(url, params=params, timeout=self.timeout)
-        if r.status_code != 200:
-            raise DominoApiError(f"GET {url} -> {r.status_code} {r.text[:300]}")
-        try:
-            return r.json()
-        except Exception:
-            raise DominoApiError(f"Non-JSON response from {url}")
-
-    def get_bytes(self, path: str, params: Optional[dict] = None) -> bytes:
-        url = self._url(path)
-        # Override Accept to allow raw content
-        headers = {**self.s.headers, "Accept": "*/*"}
-        r = self.s.get(url, params=params, headers=headers, timeout=self.timeout)
-        if r.status_code != 200:
-            raise DominoApiError(f"GET {url} -> {r.status_code} ({r.headers.get('content-type')})")
-        return r.content
-
-# ───────────────────────────── Domino API Calls ─────────────────────────────
-
-def get_registered_model_version(dc: DominoClient, model_name: str, version: int) -> dict:
-    return dc.get_json(f"/api/registeredmodels/v1/{requests.utils.quote(model_name)}/versions/{version}")
+    user = os.environ.get("DOMINO_USER_NAME") or short_fallback()
+    project = os.environ.get("DOMINO_PROJECT_ID") or short_fallback()
+    combined = f"{user}/{project}"
+    digest = hashlib.sha256(combined.encode()).digest()
+    encoded = base64.urlsafe_b64encode(digest).decode("utf-8").rstrip("=")
+    return f"{user}_{encoded[:length]}"
 
 
-def get_git_browse(dc: DominoClient, owner_username: str, project_name: str) -> dict:
-    return dc.get_json("/v4/code/gitBrowse", params={
-        "ownerUsername": owner_username,
-        "projectName": project_name,
-    })
+EXPERIMENT_NAME = f"external_models_{domino_short_id(4)}"
 
 
-def list_repo_paths(
-    dc: DominoClient,
-    project_id: str,
-    repo_id: str,
-    commit: str,
-    include_regex: Optional[re.Pattern] = None,
-    exclude_regex: Optional[re.Pattern] = None,
-    max_files: int = 10000,
-) -> List[str]:
-    """
-    Recursively list repo files at a commit using /git/browse.
-
-    - Do NOT descend into directories that match exclude_regex.
-    - Skip files that match exclude_regex.
-    - Keep files that match include_regex (or everything if include_regex is None).
-    """
-    paths: List[str] = []
-    stack: List[str] = [""]  # "" = repo root
-
-    while stack:
-        directory = stack.pop()
-        params = {"commit": commit}
-        if directory:
-            params["directory"] = directory
-
-        payload = dc.get_json(
-            f"/v4/projects/{project_id}/gitRepositories/{repo_id}/git/browse",
-            params,
-        )
-        items = (payload or {}).get("data", {}).get("items", [])
-        for it in items:
-            kind = it.get("kind")
-            path = it.get("path") or it.get("name")
-            if not path:
-                continue
-
-            if kind == "dir":
-                # add trailing slash so exclude patterns like .../dir/ match directories only
-                dir_key = path + "/"
-                if exclude_regex and exclude_regex.search(dir_key):
-                    continue  # block descent
-                stack.append(path)
-
-            elif kind == "file":
-                if exclude_regex and exclude_regex.search(path):
-                    continue
-                if include_regex is None or include_regex.search(path):
-                    paths.append(path)
-                    if len(paths) >= max_files:
-                        logger.warning("Reached max_files cap: %d", max_files)
-                        return paths
-
-    return sorted(paths)
+def save_uploaded_files(files, temp_dir):
+    """Save uploaded files to temp directory maintaining structure."""
+    saved_files = []
+    for file in files:
+        filepath = Path(temp_dir) / file.filename
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        file.save(str(filepath))
+        saved_files.append(str(filepath))
+    return saved_files
 
 
-def fetch_file_bytes(dc: DominoClient, project_id: str, repo_id: str, commit: str, path: str) -> bytes:
-    return dc.get_bytes(f"/v4/projects/{project_id}/gitRepositories/{repo_id}/git/raw",
-                        params={"fileName": path, "commit": commit})
-
-# ───────────────────────────── Repo Materialization ──────────────────────────
-
-def materialize_repo(
-    dc: DominoClient,
-    project_id: str,
-    repo_id: str,
-    commit: str,
-    file_regex: Optional[str],
-    exclude_regex: Optional[str],
-    max_files: int,
-    workers: int = MAX_WORKERS,
-) -> Tuple[str, List[str]]:
-    """Creates a temp dir, downloads matching files at the commit, returns (dir, paths)."""
-    # include: None/".*" means ALL files
-    include_re = None
-    if file_regex and file_regex not in (".*", "*", "ALL"):
-        include_re = re.compile(file_regex)
-
-    # exclude: compile if provided
-    exclude_re = re.compile(exclude_regex) if exclude_regex else None
-
-    repo_dir = tempfile.mkdtemp(prefix="domino_repo_")
-
-    # List the file paths first (now with include/exclude applied)
-    paths = list_repo_paths(
-        dc, project_id, repo_id, commit, include_re, exclude_re, max_files
-    )
-    if not paths:
-        return repo_dir, []
-
-    errors: List[str] = []
-
-    def _download_and_write(p: str) -> Optional[str]:
-        try:
-            content = fetch_file_bytes(dc, project_id, repo_id, commit, p)
-            abs_path = Path(repo_dir, p)
-            abs_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(abs_path, "wb") as f:
-                f.write(content)
-            return p
-        except Exception as e:
-            errors.append(f"{p}: {e}")
-            return None
-
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = [ex.submit(_download_and_write, p) for p in paths]
-        for _ in as_completed(futs):
-            pass
-
-    if errors:
-        logger.warning("Some files failed to fetch: %s", errors[:5])
-
-    written = [p for p in paths if Path(repo_dir, p).exists()]
-    return repo_dir, written
-
-# ───────────────────────────── Semgrep Integration ───────────────────────────
-
-def check_semgrep() -> Tuple[bool, Optional[str]]:
+def log_metadata_as_metrics(metadata_path: str):
+    """Load metadata JSON and log all numeric values as MLflow metrics."""
     try:
-        r = subprocess.run(["semgrep", "--version"], capture_output=True, text=True)
-        if r.returncode == 0:
-            return True, r.stdout.strip()
-        return False, r.stdout or r.stderr
-    except FileNotFoundError:
-        return False, "semgrep not found in PATH"
-
-
-def run_semgrep_scan(target_dir: str, config: str = DEFAULT_SEMGREP_CONFIG, timeout_sec: int = 300) -> dict:
-    ok, msg = check_semgrep()
-    if not ok:
-        raise RuntimeError(f"Semgrep not available: {msg}")
-
-    cmd = [
-        "semgrep", "--config", config,
-        "--json",
-        "--no-git-ignore",
-        "--exclude", "*/tests/*",
-        "--exclude", "*/test*/*", 
-        "--exclude", "*/.git/*",
-        "--exclude", "*/venv/*",
-        "--exclude", "*/env/*",
-        "--exclude", "*/__pycache__/*",
-        target_dir
-    ]
-    
-    logger.info(f"Running semgrep command: {' '.join(cmd)}")
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec)
-    
-    logger.info(f"Semgrep exit code: {proc.returncode}")
-    logger.info(f"Semgrep stdout length: {len(proc.stdout or '')}")
-    logger.info(f"Semgrep stderr length: {len(proc.stderr or '')}")
-    
-    if proc.stderr:
-        logger.warning(f"Semgrep stderr: {proc.stderr[:500]}")
-
-    # semgrep exits 0 when no issues, 1 when issues found, >1 for errors
-    if proc.returncode in (0, 1):
-        try:
-            result = json.loads(proc.stdout or '{"results": []}')
-            logger.info(f"Semgrep found {len(result.get('results', []))} issues")
-            return result
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse semgrep JSON: {e}")
-            logger.error(f"Raw stdout: {proc.stdout[:1000]}")
-            raise RuntimeError(f"Failed to parse semgrep JSON: {e}\nSTDOUT[:500]: {proc.stdout[:500]}")
-    
-    # For non-zero/non-one exit codes, provide more detailed error info
-    error_msg = f"Semgrep failed (code {proc.returncode})"
-    if proc.stderr:
-        error_msg += f": {proc.stderr[:300]}"
-    if proc.stdout:
-        error_msg += f" | stdout: {proc.stdout[:300]}"
-    
-    logger.error(error_msg)
-    raise RuntimeError(error_msg)
-
-
-def summarize_semgrep(output: dict) -> dict:
-    results = output.get("results", []) if isinstance(output, dict) else []
-    sev = {"HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
-    issues = []
-    for r in results:
-        # Map semgrep severity to bandit-style levels
-        semgrep_sev = r.get("extra", {}).get("severity", "INFO").upper()
-        # Convert semgrep severities to bandit-style
-        if semgrep_sev == "ERROR":
-            mapped_sev = "HIGH"
-        elif semgrep_sev == "WARNING":
-            mapped_sev = "MEDIUM"
-        elif semgrep_sev == "INFO":
-            mapped_sev = "LOW"
-        else:
-            mapped_sev = "LOW"
-            
-        if mapped_sev in sev:
-            sev[mapped_sev] += 1
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
         
-        issues.append({
-            "filename": r.get("path"),
-            "line_number": r.get("start", {}).get("line"),
-            "test_id": r.get("check_id"),
-            "test_name": r.get("extra", {}).get("message", ""),
-            "issue_severity": mapped_sev,
-            "issue_confidence": "HIGH",  # semgrep doesn't have confidence levels
-            "issue_text": r.get("extra", {}).get("message", ""),
-        })
-    return {
-        "total_issues": len(results),
-        "high": sev["HIGH"],
-        "medium": sev["MEDIUM"],
-        "low": sev["LOW"],
-        "issues": issues,
-        "metrics": output.get("paths", {}),
-    }
-
-# ───────────────────────────── HTTP Endpoint ────────────────────────────────
-@app.route("/security-scan-model", methods=["POST"])
-def security_scan_model():
-    t0 = time.time()
-    try:
-        body = request.get_json(silent=True) or {}
-        model_name = body.get("modelName")
-        version = body.get("version")
-        include_issues = bool(body.get("includeIssues", True))
-        include_metrics = bool(body.get("includeMetrics", False))
-        file_regex = body.get("fileRegex", DEFAULT_FILE_REGEX)
-        exclude_regex = body.get(
-            "excludeRegex",
-            r"(^|/)(node_modules|\.git|\.venv|\.streamlit|venv|env|__pycache__|\.ipynb_checkpoints)(/|$)"
-        )
-
-        max_files = int(body.get("maxFiles", 5000))
-        timeout_sec = int(body.get("timeoutSec", 300))
-        semgrep_config = body.get("semgrepConfig", DEFAULT_SEMGREP_CONFIG)
-
-        if not model_name or version is None:
-            return jsonify({"error": "modelName and version are required"}), 400
-
-        dc = DominoClient(DOMINO_DOMAIN, DOMINO_API_KEY)
-
-        # 1) Registered model version → commit, experimentRunId, project info
-        mv = get_registered_model_version(dc, model_name, int(version))
-        tags = mv.get("tags", {}) or {}
-        commit = tags.get("mlflow.source.git.commit")
-        owner_username = mv.get("ownerUsername") or mv.get("project", {}).get("ownerUsername")
-        project_id = mv.get("project", {}).get("id") or tags.get("mlflow.domino.project_id")
-        project_name = mv.get("project", {}).get("name") or tags.get("mlflow.domino.project_name")
-        run_url_rel = mv.get("versionUiDetails", {}).get("experimentRunInfo", {}).get("runUrl")
-        run_url = f"{DOMINO_DOMAIN}{run_url_rel}" if run_url_rel else None
-        experiment_run_id = mv.get("experimentRunId")
-
-        if not (owner_username and project_name and project_id):
-            return jsonify({"error": "Unable to resolve ownerUsername/projectName/projectId from model"}), 500
-        if not commit:
-            return jsonify({"error": "Model version missing tags.mlflow.source.git.commit; cannot pin snapshot."}), 400
-
-        # 2) Resolve main repository id/uri via gitBrowse
-        gb = get_git_browse(dc, owner_username, project_name)
-        repo_id = gb.get("projectMainRepositoryId")
-        repo_uri = gb.get("projectMainRepositoryUri")
-        if not repo_id:
-            return jsonify({"error": "No main repository found for project"}), 404
-
-        # 3) Download repo at commit to temp dir (only files matching regex)
-        repo_dir, file_paths = materialize_repo(dc, project_id, repo_id, commit, file_regex, exclude_regex, max_files)
-        if not file_paths:
-            shutil.rmtree(repo_dir, ignore_errors=True)
-            return jsonify({"error": "No files to scan after filtering", "regex": file_regex, "excludeRegex": exclude_regex}), 404
-
-        # 4) Semgrep scan
-        try:
-            logger.info(f"Starting semgrep scan on {len(file_paths)} files in {repo_dir}")
-            logger.info(f"Using semgrep config: {semgrep_config}")
-            semgrep_raw = run_semgrep_scan(repo_dir, config=semgrep_config, timeout_sec=timeout_sec)
-        finally:
-            shutil.rmtree(repo_dir, ignore_errors=True)
-
-        summary = summarize_semgrep(semgrep_raw)
-
-        result = {
-            "summary": summary,
-            "model": {
-                "modelName": mv.get("modelName"),
-                "modelVersion": mv.get("modelVersion"),
-                "experimentRunId": experiment_run_id,
-                "runUrl": run_url,
-                "project": {"id": project_id, "name": project_name},
-                "git": {
-                    "commit": commit,
-                    "projectMainRepositoryId": repo_id,
-                    "projectMainRepositoryUri": repo_uri,
-                },
-            },
-            "scan": {
-                "total": summary["total_issues"],
-                "high": summary["high"],
-                "medium": summary["medium"],
-                "low": summary["low"],
-                "file_count_scanned": len(file_paths),
-                "file_regex": file_regex,
-                "exclude_regex": exclude_regex,
-                "duration_sec": round(time.time() - t0, 3),
-            },
-        }
-        if include_issues:
-            result["issues"] = summary["issues"]
-        if include_metrics:
-            result["metrics"] = summary.get("metrics")
-
-        return jsonify(result)
-
-    except DominoApiError as e:
-        logger.exception("Domino API error")
-        return jsonify({"error": str(e)}), 502
-    except subprocess.TimeoutExpired:
-        return jsonify({"error": "Semgrep timed out"}), 504
+        def flatten_dict(d, parent_key='', sep='_'):
+            """Flatten nested dictionary into dot-separated keys."""
+            items = []
+            for k, v in d.items():
+                new_key = f"{parent_key}{sep}{k}" if parent_key else k
+                if isinstance(v, dict):
+                    items.extend(flatten_dict(v, new_key, sep=sep).items())
+                else:
+                    items.append((new_key, v))
+            return dict(items)
+        
+        flat_metadata = flatten_dict(metadata)
+        
+        for key, value in flat_metadata.items():
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                mlflow.log_metric(key, value)
+                logger.info(f"Logged metric: {key} = {value}")
+            elif isinstance(value, bool):
+                mlflow.log_metric(key, int(value))
+                logger.info(f"Logged metric: {key} = {int(value)}")
+            else:
+                mlflow.log_param(key, str(value))
+                logger.info(f"Logged param: {key} = {value}")
+                
     except Exception as e:
-        logger.exception("Unexpected error in security_scan_model")
-        return jsonify({"error": f"Unexpected error: {e}"}), 500
+        logger.warning(f"Could not log metadata as metrics: {e}")
 
 
-def make_domino_api_request(endpoint, method='GET'):
-    """Make authenticated request to Domino API"""
-    url = f"{DOMINO_DOMAIN}/{endpoint.lstrip('/')}"
+def update_model_description(model_name: str, description: str) -> bool:
+    """Update model description via Domino API."""
+    domain = DOMINO_DOMAIN.removeprefix("https://").removeprefix("http://")
+    url = f"https://{domain}/api/registeredmodels/v1/{model_name}"
     headers = {
-        'X-Domino-Api-Key': DOMINO_API_KEY,
-        'Accept': 'application/json'
+        "accept": "application/json",
+        "Content-Type": "application/json",
+        "X-Domino-Api-Key": DOMINO_API_KEY
+    }
+    payload = {
+        "description": description,
+        "discoverable": True
     }
     
     try:
-        response = requests.request(method, url, headers=headers, timeout=30)
+        logger.info(f"Updating model description for {model_name}")
+        response = requests.patch(url, json=payload, headers=headers, timeout=30)
         response.raise_for_status()
-        return response.json()
+        logger.info(f"Successfully updated model description for {model_name}")
+        return True
     except requests.RequestException as e:
-        logger.error(f"Domino API request failed: {e}")
-        raise
-
-def get_experiment_run_details(experiment_id):
-    """Get experiment run details including repository info"""
-    try:
-        # First try to get run details directly
-        run_data = make_domino_api_request(f'api/runs/v1/runs/{experiment_id}')
-        return run_data
-    except Exception as e:
-        logger.error(f"Failed to get run details for {experiment_id}: {e}")
-        raise
+        logger.error(f"Failed to update model description: {e}")
+        return False
 
 
-# Test curl command at startup
-def test_api_connectivity():
-    if not DOMINO_DOMAIN or not DOMINO_API_KEY:
-        logger.error("Missing DOMINO_DOMAIN or DOMINO_API_KEY environment variables")
-        return
-    
-    test_url = f"{DOMINO_DOMAIN}/api/governance/v1/bundles"
-    
-    # Build the exact curl command
-    curl_cmd_str = f"curl -s -w 'HTTP_CODE:%{{http_code}}' -H 'X-Domino-Api-Key: {DOMINO_API_KEY}' -H 'Accept: application/json' '{test_url}'"
-    curl_cmd = [
-        'curl', '-s', '-w', 'HTTP_CODE:%{http_code}',
-        '-H', f'X-Domino-Api-Key: {DOMINO_API_KEY}',
-        '-H', 'Accept: application/json',
-        test_url
-    ]
-    
-    try:
-        logger.info(f"Testing API connectivity with:")
-        logger.info(f"  {curl_cmd_str}")
-        result = subprocess.run(curl_cmd, capture_output=True, text=True, timeout=30)
-        logger.info(f"Curl exit code: {result.returncode}")
-        logger.info(f"Curl stdout: {result.stdout}")
-        if result.stderr:
-            logger.info(f"Curl stderr: {result.stderr}")
-    except subprocess.TimeoutExpired:
-        logger.error("Curl command timed out after 30 seconds")
-        logger.info(f"Copy/paste to test manually: {curl_cmd_str}")
-    except Exception as e:
-        logger.error(f"Curl command failed: {str(e)}")
-        logger.info(f"Copy/paste to test manually: {curl_cmd_str}")
-
-# Health check endpoints
 @app.route("/_stcore/health")
 def health():
     return "", 200
+
 
 @app.route("/_stcore/host-config")
 def host_config():
     return "", 200
 
+
 @app.route("/proxy/<path:path>", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 def proxy_request(path):
+    """Proxy requests to upstream services."""
     logger.info(f"Proxy request: {request.method} {path}")
     
     if request.method == "OPTIONS":
         return "", 204
     
-    # Get target URL from query param
     target_base = request.args.get('target')
     if not target_base:
-        error_msg = "Missing target URL. Use ?target=https://api.example.com"
-        logger.error(error_msg)
-        return jsonify({"error": error_msg}), 400
+        return jsonify({"error": "Missing target URL. Use ?target=https://api.example.com"}), 400
     
-    # Build upstream URL
     upstream_url = urljoin(target_base.rstrip("/") + "/", path)
     
-    # Forward headers (exclude hop-by-hop headers and conflicting auth)
-    forward_headers = {}
-    skip_headers = {
-        "host", "content-length", "transfer-encoding", "connection", "keep-alive",
-        "authorization"  # Skip this - conflicts with X-Domino-Api-Key
-    }
-    
-    for key, value in request.headers:
-        if key.lower() not in skip_headers:
-            forward_headers[key] = value
-    
-    # Filter out the 'target' parameter from upstream request
+    skip_headers = {"host", "content-length", "transfer-encoding", "connection", "keep-alive", "authorization"}
+    forward_headers = {k: v for k, v in request.headers if k.lower() not in skip_headers}
     upstream_params = {k: v for k, v in request.args.items() if k != 'target'}
     
     logger.info(f"Making upstream request: {request.method} {upstream_url}")
-    if upstream_params:
-        logger.info(f"Upstream params: {upstream_params}")
-    
-    # Log the equivalent curl command for debugging
-    headers_str = " ".join([f"-H '{k}: {v}'" for k, v in forward_headers.items()])
-    params_str = "&".join([f"{k}={v}" for k, v in upstream_params.items()])
-    final_url = f"{upstream_url}?{params_str}" if params_str else upstream_url
-    curl_equivalent = f"curl -X {request.method} {headers_str} '{final_url}'"
-    logger.info(f"Equivalent curl command:")
-    logger.info(f"  {curl_equivalent}")
     
     try:
-        # Make the upstream request
         resp = requests.request(
             method=request.method,
             url=upstream_url,
@@ -549,35 +159,16 @@ def proxy_request(path):
         
         logger.info(f"Upstream response: {resp.status_code}")
         
-        # Log response body for debugging (truncated)
+        hop_by_hop = {"content-encoding", "transfer-encoding", "connection", "keep-alive"}
+        response_headers = [(k, v) for k, v in resp.headers.items() if k.lower() not in hop_by_hop]
+        
         if resp.status_code >= 400:
             try:
-                # Get a copy of the content for logging
                 content = resp.content
-                logger.error(f"Upstream error response body: {content[:1000].decode('utf-8', errors='ignore')}")
-                # Create new response with the content
-                response_headers = []
-                hop_by_hop = {"content-encoding", "transfer-encoding", "connection", "keep-alive"}
-                
-                for key, value in resp.headers.items():
-                    if key.lower() not in hop_by_hop:
-                        response_headers.append((key, value))
-                
-                return Response(
-                    content,
-                    status=resp.status_code,
-                    headers=response_headers
-                )
+                logger.error(f"Upstream error response: {content[:1000].decode('utf-8', errors='ignore')}")
+                return Response(content, status=resp.status_code, headers=response_headers)
             except Exception as e:
-                logger.error(f"Error reading response content: {str(e)}")
-        
-        # Forward response headers (exclude hop-by-hop)
-        response_headers = []
-        hop_by_hop = {"content-encoding", "transfer-encoding", "connection", "keep-alive"}
-        
-        for key, value in resp.headers.items():
-            if key.lower() not in hop_by_hop:
-                response_headers.append((key, value))
+                logger.error(f"Error reading response content: {e}")
         
         return Response(
             resp.iter_content(chunk_size=8192),
@@ -587,22 +178,150 @@ def proxy_request(path):
         )
         
     except requests.RequestException as e:
-        error_msg = f"Proxy request failed: {str(e)}"
-        logger.error(error_msg)
-        return jsonify({"error": error_msg}), 502
+        logger.error(f"Proxy request failed: {e}")
+        return jsonify({"error": f"Proxy request failed: {e}"}), 502
     except Exception as e:
-        error_msg = f"Unexpected error: {str(e)}"
-        logger.error(error_msg)
-        return jsonify({"error": error_msg}), 500
+        logger.error(f"Unexpected error: {e}")
+        return jsonify({"error": f"Unexpected error: {e}"}), 500
 
-# Page routes
+
+@app.route("/register-external-model", methods=["POST"])
+def register_external_model():
+    """Register an external model with Domino using MLflow."""
+    logger.info("=" * 80)
+    logger.info("REGISTER EXTERNAL MODEL - Request Received")
+    logger.info("=" * 80)
+    
+    temp_dir = None
+    
+    try:
+        # Extract and validate form data
+        model_name = request.form.get("modelName")
+        model_description = request.form.get("modelDescription", "")
+        model_owner = request.form.get("modelOwner")
+        model_use_case = request.form.get("modelUseCase")
+        model_usage_pattern = request.form.get("modelUsagePattern")
+        model_environment_id = request.form.get("modelEnvironmentId")
+        model_execution_script = request.form.get("modelExecutionScript", "")
+        
+        required_fields = [model_name, model_owner, model_use_case, model_usage_pattern, model_environment_id]
+        if not all(required_fields):
+            return jsonify({"status": "error", "message": "Missing required fields"}), 400
+        
+        # Save uploaded files
+        files = request.files.getlist('files')
+        temp_dir = tempfile.mkdtemp(prefix=f"external_model_{model_name}_")
+        logger.info(f"Created temp directory: {temp_dir}")
+        
+        saved_files = save_uploaded_files(files, temp_dir)
+        logger.info(f"Saved {len(saved_files)} files to temp directory")
+        
+        # Find required files
+        model_pkl = None
+        inference_py = None
+        metadata_json = None
+        requirements_txt = None
+        
+        for filepath in saved_files:
+            filename = Path(filepath).name
+            if filename == "model.pkl":
+                model_pkl = filepath
+            elif filename == "inference.py":
+                inference_py = filepath
+            elif filename == "metadata.json":
+                metadata_json = filepath
+            elif filename == "requirements.txt":
+                requirements_txt = filepath
+        
+        # Register with MLflow
+        mlflow.set_experiment(EXPERIMENT_NAME)
+        logger.info(f"Using MLflow experiment: {EXPERIMENT_NAME}")
+        
+        with mlflow.start_run(run_name=f"{model_name}_registration_{int(time.time())}") as run:
+            run_id = run.info.run_id
+            logger.info(f"Started MLflow run: {run_id}")
+            
+            # Log parameters
+            mlflow.log_param("model_name", model_name)
+            mlflow.log_param("model_description", model_description)
+            mlflow.log_param("model_owner", model_owner)
+            mlflow.log_param("model_use_case", model_use_case)
+            mlflow.log_param("model_usage_pattern", model_usage_pattern)
+            mlflow.log_param("model_environment_id", model_environment_id)
+            mlflow.log_param("model_execution_script", model_execution_script)
+            mlflow.log_param("registration_time", time.time())
+            mlflow.log_param("file_count", len(saved_files))
+            
+            # Log artifacts
+            for filepath in saved_files:
+                rel_path = Path(filepath).relative_to(temp_dir)
+                artifact_dir = str(rel_path.parent) if rel_path.parent != Path(".") else None
+                mlflow.log_artifact(filepath, artifact_path=artifact_dir)
+                logger.info(f"Logged artifact: {rel_path}")
+            
+            # Log metadata as metrics if available
+            if metadata_json:
+                log_metadata_as_metrics(metadata_json)
+            
+            # Log model
+            mlflow.pyfunc.log_model(
+                artifact_path="model",
+                code_paths=[inference_py],
+                artifacts={
+                    "model_file": model_pkl,
+                    "metadata_file": metadata_json
+                },
+                pip_requirements=requirements_txt,
+                python_model=mlflow.pyfunc.PythonModel(),
+                registered_model_name=model_name
+            )
+            
+            logger.info(f"Successfully logged model to MLflow")
+            logger.info(f"Run ID: {run_id}")
+            logger.info(f"Experiment: {EXPERIMENT_NAME}")
+        
+        # Update model description via Domino API
+        update_model_description(model_name, model_description)
+        
+        # Clean up
+        if temp_dir and Path(temp_dir).exists():
+            shutil.rmtree(temp_dir)
+            logger.info(f"Cleaned up temp directory: {temp_dir}")
+        
+        logger.info("=" * 80)
+        
+        return jsonify({
+            "status": "success",
+            "message": "Model registered successfully",
+            "data": {
+                "model_name": model_name,
+                "run_id": run_id,
+                "experiment_name": EXPERIMENT_NAME,
+                "file_count": len(saved_files)
+            }
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error registering model: {e}", exc_info=True)
+        
+        if temp_dir and Path(temp_dir).exists():
+            shutil.rmtree(temp_dir)
+        
+        return jsonify({
+            "status": "error",
+            "message": f"Failed to register model: {str(e)}"
+        }), 500
+
+
 def safe_domino_config():
+    """Return sanitized Domino configuration for templates."""
     return {
         "PROJECT_ID": os.environ.get("DOMINO_PROJECT_ID", ""),
         "RUN_HOST_PATH": os.environ.get("DOMINO_RUN_HOST_PATH", ""),
         "API_BASE": DOMINO_DOMAIN,
-        "API_KEY": DOMINO_API_KEY,   
+        "API_KEY": DOMINO_API_KEY,
     }
+
 
 @app.route("/")
 def home():
@@ -610,9 +329,6 @@ def home():
 
 
 if __name__ == "__main__":
-    # Test API connectivity on startup
-    test_api_connectivity()
-    
     port = int(os.environ.get("PORT", 8888))
     logger.info(f"Starting Flask app on port {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
