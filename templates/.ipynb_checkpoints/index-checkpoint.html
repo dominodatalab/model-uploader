@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Domino Model Management Dashboard</title>
+    <script>
+        // Get the current path from the URL to handle proxy routing
+        const basePath = window.location.pathname.split('/proxy/')[0] + '/proxy/8501';
+        // Get project ID from server
+        const DOMINO_PROJECT_ID = "{{ project_id }}";
+    </script>
+    <link rel="stylesheet" type="text/css" href="./static/css/style.css">
+</head>
+<body style="margin-left: 64px; margin-right: 64px; margin-top: 32px;">
+    <div class="main-layout">
+        <div class="container">
+            <!-- Welcome header -->
+            <h1 class="welcome-title">Model Management Dashboard</h1>
+
+            <!-- Navigation tabs -->
+            <nav class="nav-tabs">
+                <button class="tab active" data-filter="all">All Models</button>
+                <button class="tab" data-filter="production">Production</button>
+                <button class="tab" data-filter="development">Development</button>
+                <button class="tab" data-filter="testing">Testing</button>
+                <button class="tab" data-filter="on hold">On Hold</button>
+            </nav>
+
+
+            <!-- Main table -->
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                                <th>Application Name</th>
+                                <th>Application Type</th>
+                                <th>Service Level</th>
+                                <th>Significance Risk Score</th>
+                                <th>Usage Risk Score</th>
+                                <th>Complexity Risk Score</th>
+                                <th>User Type</th>
+                                <th>Output Authorization</th>
+                                <th>Expiry Date</th>
+                                <th>Security Classification</th>
+                                <th>EU AI Act Risk Level</th>
+                                <th>Model Health</th>
+                                <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- Table content will be populated dynamically -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <script>
+      // POC runtime config injected by Flask
+      window.DOMINO = {{ DOMINO | tojson }};
+    </script>
+    <script type="text/javascript" src="./static/js/main.js"></script>
+</body>
+</html>
