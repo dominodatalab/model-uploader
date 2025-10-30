@@ -278,7 +278,8 @@ def register_external_model():
                 requirements_txt = filepath
         
         # Register with MLflow
-        mlflow.set_experiment(EXPERIMENT_NAME)
+        exp = mlflow.set_experiment(EXPERIMENT_NAME)
+        experiment_id = exp.experiment_id
         logger.info(f"Using MLflow experiment: {EXPERIMENT_NAME}")
         
         with mlflow.start_run(run_name=f"{model_name}_registration_{int(time.time())}") as run:
@@ -287,6 +288,7 @@ def register_external_model():
             
             # Log parameters
             mlflow.log_param("model_name", model_name)
+            mlflow.log_param("experiment_id", experiment_id)
             mlflow.log_param("model_description", model_description)
             mlflow.log_param("model_owner", model_owner)
             mlflow.log_param("model_use_case", model_use_case)
@@ -331,7 +333,20 @@ def register_external_model():
         # Create bundle
         policy_id = POLICY_IDS_LIST[0] if POLICY_IDS_LIST else ""
         bundle_data = create_bundle(model_name, model_version, policy_id)
-        print('bd', bundle_data)
+        
+        # Extract project owner and name from bundle_data
+        project_owner = bundle_data.get("projectOwner", "")
+        project_name = bundle_data.get("projectName", "")
+        bundle_id = bundle_data.get("id", "")
+        stage = bundle_data.get("stage", "").lower().replace(" ", "-")
+        
+        # Construct URLs
+        domain = DOMINO_DOMAIN.removeprefix("https://").removeprefix("http://")
+        experiment_url = f"https://{domain}/experiments/{project_owner}/{project_name}/{experiment_id}"
+        experiment_run_url = f"https://{domain}/experiments/{project_owner}/{project_name}/{experiment_id}/{run_id}"
+        model_artifacts_url = f"https://{domain}/experiments/{project_owner}/{project_name}/{experiment_id}/{run_id}?isdir=false&path=model%2FMLmodel&tab=Outputs"
+        model_card_url = f"https://{domain}/u/{project_owner}/{project_name}/model-registry/{model_name}/model-card?version={model_version}"
+        bundle_url = f"https://{domain}/u/{project_owner}/{project_name}/governance/bundle/{bundle_id}/policy/{policy_id}/evidence/stage/{stage}"
 
         # Clean up
         if temp_dir and Path(temp_dir).exists():
@@ -349,8 +364,13 @@ def register_external_model():
                 "run_id": run_id,
                 "experiment_name": EXPERIMENT_NAME,
                 "file_count": len(saved_files),
-                "bundle_id": bundle_data.get("id"),
-                "bundle_name": bundle_data.get("name")
+                "bundle_id": bundle_id,
+                "bundle_name": bundle_data.get("name"),
+                "experiment_url": experiment_url,
+                "experiment_run_url": experiment_run_url,
+                "model_artifacts_url": model_artifacts_url,
+                "model_card_url": model_card_url,
+                "bundle_url": bundle_url,
             }
         }), 200
         

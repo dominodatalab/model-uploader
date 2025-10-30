@@ -139,22 +139,34 @@ function hideLoading(button) {
 }
 
 // Show success message
-function showSuccess() {
-    const container = document.querySelector('.container');
-    const successHtml = `
+function showSuccess(result) {
+    const successContainer = document.getElementById('success-message');
+    
+    const metadataHtml = result ? `
+        <div class="metadata">
+            <h4>Registration Details:</h4>
+            <pre>${JSON.stringify(result, null, 2)}</pre>
+        </div>
+    ` : '';
+    
+    successContainer.innerHTML = `
         <div class="success-box">
-            <h2>✓ Model Registered Successfully</h2>
+            <h3>✓ Model Registered Successfully</h3>
             <p>Your model has been registered with Domino.</p>
-            <button class="btn btn-primary" onclick="resetForm()">Register Another Model</button>
+            ${metadataHtml}
         </div>
     `;
-    
-    container.innerHTML = successHtml;
+    successContainer.style.display = 'block';
 }
 
 // Reset form
 function resetForm() {
-    location.reload();
+    document.getElementById('model-upload-form').reset();
+    appState.uploadedFiles = [];
+    displayUploadedFiles();
+    showErrors([]);
+    document.getElementById('success-message').innerHTML = '';
+    document.getElementById('success-message').style.display = 'none';
 }
 
 // Handle form submission
@@ -168,6 +180,8 @@ async function handleSubmit(event) {
     }
     
     showErrors([]);
+    document.getElementById('success-message').innerHTML = '';
+    document.getElementById('success-message').style.display = 'none';
     
     const submitButton = event.target.querySelector('button[type="submit"]');
     showLoading(submitButton);
@@ -203,11 +217,12 @@ async function handleSubmit(event) {
         const result = await response.json();
         console.log('Registration successful:', result);
         
-        showSuccess();
+        showSuccess(result);
         
     } catch (error) {
         console.error('Registration error:', error);
         showErrors([`Failed to register model: ${error.message}`]);
+    } finally {
         hideLoading(submitButton);
     }
 }
@@ -222,53 +237,62 @@ function initializeForm() {
         <div id="error-messages"></div>
         
         <form id="model-upload-form" class="model-form">
-            <div class="form-group">
-                <label for="model-name">Model Name <span class="required">*</span></label>
-                <input type="text" id="model-name" name="modelName" required>
-            </div>
-            
-            <div class="form-group">
-                <label for="model-description">Model Description</label>
-                <textarea id="model-description" name="modelDescription" rows="4"></textarea>
-            </div>
-            
-            <div class="form-group">
-                <label for="model-owner">Model Owner <span class="required">*</span></label>
-                <input type="text" id="model-owner" name="modelOwner" required>
-            </div>
-            
-            <div class="form-group">
-                <label for="model-use-case">Model Use Case <span class="required">*</span></label>
-                <textarea id="model-use-case" name="modelUseCase" rows="4" required></textarea>
-            </div>
-            
-            <div class="form-group">
-                <label for="model-usage-pattern">Model Usage Pattern <span class="required">*</span></label>
-                <textarea id="model-usage-pattern" name="modelUsagePattern" rows="4" required></textarea>
-            </div>
-            
-            <div class="form-group">
-                <label for="model-environment-id">Model Environment ID <span class="required">*</span></label>
-                <input type="text" id="model-environment-id" name="modelEnvironmentId" required>
-            </div>
-            
-            <div class="form-group">
-                <label for="model-execution-script">Model Execution Script</label>
-                <input type="text" id="model-execution-script" name="modelExecutionScript" placeholder="app.sh">
-            </div>
-            
-            <div class="form-group">
-                <label for="model-upload">Upload Model Folder <span class="required">*</span></label>
-                <input type="file" id="model-upload" webkitdirectory directory multiple required>
-                <p class="help-text">Upload a folder containing model.pkl, requirements.txt, metadata.json, and inference.py</p>
-            </div>
-            
-            <div id="uploaded-files-display" class="files-display">
-                <p class="no-files">No files uploaded yet</p>
-            </div>
-            
-            <div class="form-actions">
-                <button type="submit" class="btn btn-primary">Register External Model with Domino</button>
+            <div class="form-columns">
+                <div class="form-column-left">
+                    <div class="form-group">
+                        <label for="model-name">Model Name <span class="required">*</span></label>
+                        <input type="text" id="model-name" name="modelName" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="model-description">Model Description</label>
+                        <textarea id="model-description" name="modelDescription" rows="4"></textarea>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="model-owner">Model Owner <span class="required">*</span></label>
+                        <input type="text" id="model-owner" name="modelOwner" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="model-use-case">Model Use Case <span class="required">*</span></label>
+                        <textarea id="model-use-case" name="modelUseCase" rows="4" required></textarea>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="model-usage-pattern">Model Usage Pattern <span class="required">*</span></label>
+                        <textarea id="model-usage-pattern" name="modelUsagePattern" rows="4" required></textarea>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="model-environment-id">Model Environment ID <span class="required">*</span></label>
+                        <input type="text" id="model-environment-id" name="modelEnvironmentId" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="model-execution-script">Model Execution Script</label>
+                        <input type="text" id="model-execution-script" name="modelExecutionScript" placeholder="app.sh">
+                    </div>
+                </div>
+                
+                <div class="form-column-right">
+                    <div class="form-group">
+                        <label for="model-upload">Upload Model Folder <span class="required">*</span></label>
+                        <input type="file" id="model-upload" webkitdirectory directory multiple required>
+                        <p class="help-text">Upload a folder containing model.pkl, requirements.txt, metadata.json, and inference.py</p>
+                    </div>
+                    
+                    <div id="uploaded-files-display" class="files-display">
+                        <p class="no-files">No files uploaded yet</p>
+                    </div>
+                    
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Register External Model with Domino</button>
+                        <button type="button" class="btn btn-secondary" onclick="resetForm()">Reset</button>
+                    </div>
+                    
+                    <div id="success-message" style="display: none;"></div>
+                </div>
             </div>
         </form>
     `;

@@ -705,7 +705,7 @@ button.disabled {
 
 /* Form Styles */
 .model-form {
-    max-width: 800px;
+    max-width: 1000px;
     margin: 2rem auto;
     padding: 2rem;
     background: white;
@@ -861,7 +861,6 @@ button.disabled {
 
 /* Success Message */
 .success-box {
-    text-align: center;
     padding: 3rem;
     background: white;
     border-radius: 8px;
@@ -927,10 +926,75 @@ button.disabled {
 }
 
 /* Welcome Title */
-.welcome-title {
+/* .welcome-title {
     font-size: 32px;
     font-weight: 700;
     color: #2c3e50;
     margin-bottom: 2rem;
     text-align: center;
+} */
+
+/* Two-column layout styles */
+.form-columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+    margin-top: 2rem;
+}
+
+.form-column-left,
+.form-column-right {
+    display: flex;
+    flex-direction: column;
+}
+
+/* Modal styles */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.modal-content {
+    background: white;
+    padding: 2rem;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    text-align: center;
+    max-width: 500px;
+}
+
+.modal-content h2 {
+    color: #22c55e;
+    margin-bottom: 1rem;
+}
+
+.modal-content p {
+    margin-bottom: 1.5rem;
+}
+
+/* Form actions button layout */
+.form-actions {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+
+/* Responsive: stack on smaller screens */
+@media (max-width: 968px) {
+    .form-columns {
+        grid-template-columns: 1fr;
+    }
+    
+    .form-actions {
+        flex-direction: column;
+    }
 }
