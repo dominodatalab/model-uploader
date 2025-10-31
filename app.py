@@ -394,12 +394,12 @@ def register_external_model():
         list_the_file_names_and_sizes = ''
         for saved_file in saved_files:
             filepath = saved_file.get('path', '')
-            filesize = saved_file.get('size_mb', '')
+            filesize = saved_file.get('size_bytes', '')
             rel_path = str(Path(filepath).relative_to(temp_dir))
             file_status[rel_path] = 'uploaded'
             filename = Path(filepath).name
             
-            list_the_file_names_and_sizes += f"{filename}  -  {filesize}MB\n"
+            list_the_file_names_and_sizes += f"{filename}  -  {filesize} Bytes\n"
 
             if filename == "model.pkl":
                 model_pkl = filepath
