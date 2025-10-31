@@ -142,18 +142,123 @@ function hideLoading(button) {
 function showSuccess(result) {
     const successContainer = document.getElementById('success-message');
     
-    const metadataHtml = result ? `
-        <div class="metadata">
-            <h4>Registration Details:</h4>
-            <pre>${JSON.stringify(result, null, 2)}</pre>
+    if (!result) {
+        successContainer.innerHTML = `
+            <div class="success-box">
+                <h3>✓ Model Registered Successfully</h3>
+                <p>Your model has been registered with Domino.</p>
+            </div>
+        `;
+        successContainer.style.display = 'block';
+        return;
+    }
+    
+    const isSuccess = result.status === 'success';
+    const statusColor = isSuccess ? '#10b981' : '#ef4444';
+    const statusText = result.status || 'unknown';
+    
+    const linksHtml = result.data ? `
+        <div class="model-links">
+            <h4>Quick Links:</h4>
+            <div class="link-buttons-grid">
+                ${result.data.bundle_url ? `
+                    <a href="${result.data.bundle_url}" target="_blank" rel="noopener noreferrer" class="link-button">
+                        <i class="icon fas fa-clipboard-list"></i>
+                        <span>Intake Bundle</span>
+                        <i class="external-icon fas fa-external-link-alt"></i>
+                    </a>
+                ` : ''}
+                ${result.data.model_card_url ? `
+                    <a href="${result.data.model_card_url}" target="_blank" rel="noopener noreferrer" class="link-button">
+                        <i class="icon fas fa-id-card"></i>
+                        <span>Model Card</span>
+                        <i class="external-icon fas fa-external-link-alt"></i>
+                    </a>
+                ` : ''}
+                ${result.data.model_artifacts_url ? `
+                    <a href="${result.data.model_artifacts_url}" target="_blank" rel="noopener noreferrer" class="link-button">
+                        <i class="icon fas fa-cube"></i>
+                        <span>Model Artifacts</span>
+                        <i class="external-icon fas fa-external-link-alt"></i>
+                    </a>
+                ` : ''}
+                ${result.data.experiment_run_url ? `
+                    <a href="${result.data.experiment_run_url}" target="_blank" rel="noopener noreferrer" class="link-button">
+                        <i class="icon fas fa-play-circle"></i>
+                        <span>Experiment Run</span>
+                        <i class="external-icon fas fa-external-link-alt"></i>
+                    </a>
+                ` : ''}
+                ${result.data.experiment_url ? `
+                    <a href="${result.data.experiment_url}" target="_blank" rel="noopener noreferrer" class="link-button">
+                        <i class="icon fas fa-flask"></i>
+                        <span>Experiment</span>
+                        <i class="external-icon fas fa-external-link-alt"></i>
+                    </a>
+                ` : ''}
+            </div>
+        </div>
+    ` : '';
+    
+    const infoHtml = result.data ? `
+        <div class="model-info">
+            <h4>Model Information:</h4>
+            <div class="info-grid">
+                ${result.data.bundle_id ? `
+                    <div class="info-item">
+                        <span class="info-label">Bundle ID:</span>
+                        <span class="info-value">${result.data.bundle_id}</span>
+                    </div>
+                ` : ''}
+                ${result.data.bundle_name ? `
+                    <div class="info-item">
+                        <span class="info-label">Bundle Name:</span>
+                        <span class="info-value">${result.data.bundle_name}</span>
+                    </div>
+                ` : ''}
+                ${result.data.model_version !== undefined ? `
+                    <div class="info-item">
+                        <span class="info-label">Model Version:</span>
+                        <span class="info-value">${result.data.model_version}</span>
+                    </div>
+                ` : ''}
+                ${result.data.run_id ? `
+                    <div class="info-item">
+                        <span class="info-label">Experiment Run ID:</span>
+                        <span class="info-value">${result.data.run_id}</span>
+                    </div>
+                ` : ''}
+                ${result.data.experiment_name ? `
+                    <div class="info-item">
+                        <span class="info-label">Experiment Name:</span>
+                        <span class="info-value">${result.data.experiment_name}</span>
+                    </div>
+                ` : ''}
+                ${result.data.model_name ? `
+                    <div class="info-item">
+                        <span class="info-label">Model Name:</span>
+                        <span class="info-value">${result.data.model_name}</span>
+                    </div>
+                ` : ''}
+            </div>
         </div>
     ` : '';
     
     successContainer.innerHTML = `
         <div class="success-box">
-            <h3>✓ Model Registered Successfully</h3>
-            <p>Your model has been registered with Domino.</p>
-            ${metadataHtml}
+            <h3>✓ Model Registration Complete</h3>
+            <div class="status-line">
+                <span class="status-label">Status:</span>
+                <span class="status-value" style="color: ${statusColor}; font-weight: bold;">${statusText}</span>
+            </div>
+            ${result.message ? `
+                <div class="message-line">
+                    <span class="message-label">Message:</span>
+                    <span class="message-value">${result.message}</span>
+                </div>
+            ` : ''}
+            ${linksHtml}
+            ${infoHtml}
         </div>
     `;
     successContainer.style.display = 'block';
@@ -236,65 +341,69 @@ function initializeForm() {
         
         <div id="error-messages"></div>
         
-        <form id="model-upload-form" class="model-form">
-            <div class="form-columns">
-                <div class="form-column-left">
-                    <div class="form-group">
-                        <label for="model-name">Model Name <span class="required">*</span></label>
-                        <input type="text" id="model-name" name="modelName" required>
+        <div class="form-layout">
+            <form id="model-upload-form" class="model-form">
+                <div class="form-columns">
+                    <div class="form-column-left">
+                        <div class="form-group">
+                            <label for="model-name">Model Name <span class="required">*</span></label>
+                            <input type="text" id="model-name" name="modelName" required>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="model-description">Model Description</label>
+                            <textarea id="model-description" name="modelDescription" rows="4"></textarea>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="model-owner">Model Owner <span class="required">*</span></label>
+                            <input type="text" id="model-owner" name="modelOwner" required>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="model-use-case">Model Use Case <span class="required">*</span></label>
+                            <textarea id="model-use-case" name="modelUseCase" rows="4" required></textarea>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="model-usage-pattern">Model Usage Pattern <span class="required">*</span></label>
+                            <textarea id="model-usage-pattern" name="modelUsagePattern" rows="4" required></textarea>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="model-environment-id">Model Environment ID <span class="required">*</span></label>
+                            <input type="text" id="model-environment-id" name="modelEnvironmentId" required>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="model-execution-script">Model Execution Script</label>
+                            <input type="text" id="model-execution-script" name="modelExecutionScript" placeholder="app.sh">
+                        </div>
                     </div>
                     
-                    <div class="form-group">
-                        <label for="model-description">Model Description</label>
-                        <textarea id="model-description" name="modelDescription" rows="4"></textarea>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="model-owner">Model Owner <span class="required">*</span></label>
-                        <input type="text" id="model-owner" name="modelOwner" required>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="model-use-case">Model Use Case <span class="required">*</span></label>
-                        <textarea id="model-use-case" name="modelUseCase" rows="4" required></textarea>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="model-usage-pattern">Model Usage Pattern <span class="required">*</span></label>
-                        <textarea id="model-usage-pattern" name="modelUsagePattern" rows="4" required></textarea>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="model-environment-id">Model Environment ID <span class="required">*</span></label>
-                        <input type="text" id="model-environment-id" name="modelEnvironmentId" required>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="model-execution-script">Model Execution Script</label>
-                        <input type="text" id="model-execution-script" name="modelExecutionScript" placeholder="app.sh">
+                    <div class="form-column-middle">
+                        <div class="form-group">
+                            <label for="model-upload">Upload Model Folder <span class="required">*</span></label>
+                            <input type="file" id="model-upload" webkitdirectory directory multiple required>
+                            <p class="help-text">Upload a folder containing model.pkl, requirements.txt, metadata.json, and inference.py</p>
+                        </div>
+                        
+                        <div id="uploaded-files-display" class="files-display">
+                            <p class="no-files">No files uploaded yet</p>
+                        </div>
+                        
+                        <div class="form-actions">
+                            <button type="submit" class="btn btn-primary">Register External Model with Domino</button>
+                            <button type="button" class="btn btn-secondary" onclick="resetForm()">Reset</button>
+                        </div>
                     </div>
                 </div>
-                
-                <div class="form-column-right">
-                    <div class="form-group">
-                        <label for="model-upload">Upload Model Folder <span class="required">*</span></label>
-                        <input type="file" id="model-upload" webkitdirectory directory multiple required>
-                        <p class="help-text">Upload a folder containing model.pkl, requirements.txt, metadata.json, and inference.py</p>
-                    </div>
-                    
-                    <div id="uploaded-files-display" class="files-display">
-                        <p class="no-files">No files uploaded yet</p>
-                    </div>
-                    
-                    <div class="form-actions">
-                        <button type="submit" class="btn btn-primary">Register External Model with Domino</button>
-                        <button type="button" class="btn btn-secondary" onclick="resetForm()">Reset</button>
-                    </div>
-                    
-                    <div id="success-message" style="display: none;"></div>
-                </div>
+            </form>
+            
+            <div class="results-column">
+                <div id="success-message" style="display: none;"></div>
             </div>
-        </form>
+        </div>
     `;
     
     // Attach event listeners

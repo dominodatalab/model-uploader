@@ -11,48 +11,11 @@
         const DOMINO_PROJECT_ID = "{{ project_id }}";
     </script>
     <link rel="stylesheet" type="text/css" href="./static/css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body style="margin-left: 64px; margin-right: 64px; margin-top: 32px;">
     <div class="main-layout">
         <div class="container">
-            <!-- Welcome header -->
-            <h1 class="welcome-title">Model Management Dashboard</h1>
-
-            <!-- Navigation tabs -->
-            <nav class="nav-tabs">
-                <button class="tab active" data-filter="all">All Models</button>
-                <button class="tab" data-filter="production">Production</button>
-                <button class="tab" data-filter="development">Development</button>
-                <button class="tab" data-filter="testing">Testing</button>
-                <button class="tab" data-filter="on hold">On Hold</button>
-            </nav>
-
-
-            <!-- Main table -->
-            <div class="table-container">
-                <table>
-                    <thead>
-                        <tr>
-                                <th>Application Name</th>
-                                <th>Application Type</th>
-                                <th>Service Level</th>
-                                <th>Significance Risk Score</th>
-                                <th>Usage Risk Score</th>
-                                <th>Complexity Risk Score</th>
-                                <th>User Type</th>
-                                <th>Output Authorization</th>
-                                <th>Expiry Date</th>
-                                <th>Security Classification</th>
-                                <th>EU AI Act Risk Level</th>
-                                <th>Model Health</th>
-                                <th></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <!-- Table content will be populated dynamically -->
-                    </tbody>
-                </table>
-            </div>
         </div>
     </div>
     <script>

@@ -58,7 +58,12 @@ def save_uploaded_files(files, temp_dir):
         filepath = Path(temp_dir) / file.filename
         filepath.parent.mkdir(parents=True, exist_ok=True)
         file.save(str(filepath))
-        saved_files.append(str(filepath))
+        filesize = filepath.stat().st_size  # bytes
+        saved_files.append({
+            "path": str(filepath),
+            "size_bytes": filesize,
+            "size_mb": round(filesize / (1024 * 1024), 2)
+        })
     return saved_files
 
 
@@ -247,6 +252,8 @@ def register_external_model():
         model_usage_pattern = request.form.get("modelUsagePattern")
         model_environment_id = request.form.get("modelEnvironmentId")
         model_execution_script = request.form.get("modelExecutionScript", "")
+        were_all_files_uploaded = False
+        list_the_file_names_and_sizes = []
         
         required_fields = [model_name, model_owner, model_use_case, model_usage_pattern, model_environment_id]
         if not all(required_fields):
@@ -266,8 +273,12 @@ def register_external_model():
         metadata_json = None
         requirements_txt = None
         
-        for filepath in saved_files:
+        for saved_file in saved_files:
+            filepath = saved_file.get('path', '')
+            size_mb = saved_file.get('size_mb', '')
             filename = Path(filepath).name
+
+            list_the_file_names_and_sizes.append(f"{filename}: {size_mb} MB \n")
             if filename == "model.pkl":
                 model_pkl = filepath
             elif filename == "inference.py":
@@ -276,6 +287,10 @@ def register_external_model():
                 metadata_json = filepath
             elif filename == "requirements.txt":
                 requirements_txt = filepath
+
+        if model_pkl and inference_py and metadata_json and requirements_txt:
+            were_all_files_uploaded = True
+
         
         # Register with MLflow
         exp = mlflow.set_experiment(EXPERIMENT_NAME)
@@ -299,12 +314,19 @@ def register_external_model():
             mlflow.log_param("file_count", len(saved_files))
             
             # Log artifacts
-            for filepath in saved_files:
+            # for filepath in saved_files:
+            #     rel_path = Path(filepath).relative_to(temp_dir)
+            #     artifact_dir = str(rel_path.parent) if rel_path.parent != Path(".") else None
+            #     mlflow.log_artifact(filepath, artifact_path=artifact_dir)
+            #     logger.info(f"Logged artifact: {rel_path}")
+
+            for saved_file in saved_files:
+                filepath = saved_file["path"]
                 rel_path = Path(filepath).relative_to(temp_dir)
                 artifact_dir = str(rel_path.parent) if rel_path.parent != Path(".") else None
                 mlflow.log_artifact(filepath, artifact_path=artifact_dir)
                 logger.info(f"Logged artifact: {rel_path}")
-            
+
             # Log metadata as metrics if available
             if metadata_json:
                 log_metadata_as_metrics(metadata_json)
@@ -333,6 +355,8 @@ def register_external_model():
         # Create bundle
         policy_id = POLICY_IDS_LIST[0] if POLICY_IDS_LIST else ""
         bundle_data = create_bundle(model_name, model_version, policy_id)
+        print('bd')
+        print(bundle_data)
         
         # Extract project owner and name from bundle_data
         project_owner = bundle_data.get("projectOwner", "")
