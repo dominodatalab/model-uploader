@@ -13,8 +13,11 @@ from urllib.parse import urljoin
 import requests
 import mlflow
 from flask import Flask, render_template, request, Response, jsonify
+import queue
+import threading
 
 app = Flask(__name__, static_url_path='/static')
+app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB limit
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,6 +36,7 @@ DOMINO_PROJECT_ID = os.environ.get("DOMINO_PROJECT_ID", "")
 logger.info(f"DOMINO_DOMAIN: {DOMINO_DOMAIN}")
 logger.info(f"DOMINO_API_KEY: {'***' if DOMINO_API_KEY else 'NOT SET'}")
 logger.info(f"DOMINO_PROJECT_ID: {DOMINO_PROJECT_ID}")
+progress_queues = {}
 
 
 def domino_short_id(length: int = 8) -> str:
@@ -50,6 +54,15 @@ def domino_short_id(length: int = 8) -> str:
 
 EXPERIMENT_NAME = f"external_models_{domino_short_id(4)}"
 
+def send_progress(request_id, step, message, progress=None, file_status=None):
+    """Send progress update to the frontend."""
+    if request_id in progress_queues:
+        progress_queues[request_id].put({
+            'step': step,
+            'message': message,
+            'progress': progress,
+            'file_status': file_status
+        })
 
 def save_uploaded_files(files, temp_dir):
     """Save uploaded files to temp directory maintaining structure."""
@@ -175,6 +188,25 @@ def host_config():
     return "", 200
 
 
+@app.route("/register-progress/<request_id>")
+def register_progress(request_id):
+    """SSE endpoint for progress updates."""
+    def generate():
+        q = queue.Queue()
+        progress_queues[request_id] = q
+        try:
+            while True:
+                data = q.get()
+                if data.get('done'):
+                    break
+                yield f"data: {json.dumps(data)}\n\n"
+        finally:
+            if request_id in progress_queues:
+                del progress_queues[request_id]
+    
+    return Response(generate(), mimetype='text/event-stream')
+
+
 @app.route("/proxy/<path:path>", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 def proxy_request(path):
     """Proxy requests to upstream services."""
@@ -242,6 +274,7 @@ def register_external_model():
     logger.info("=" * 80)
     
     temp_dir = None
+    request_id = request.form.get("requestId", str(uuid.uuid4()))
     
     try:
         # Extract and validate form data
@@ -252,8 +285,6 @@ def register_external_model():
         model_usage_pattern = request.form.get("modelUsagePattern")
         model_environment_id = request.form.get("modelEnvironmentId")
         model_execution_script = request.form.get("modelExecutionScript", "")
-        were_all_files_uploaded = False
-        list_the_file_names_and_sizes = []
         
         required_fields = [model_name, model_owner, model_use_case, model_usage_pattern, model_environment_id]
         if not all(required_fields):
@@ -264,10 +295,13 @@ def register_external_model():
         temp_dir = tempfile.mkdtemp(prefix=f"external_model_{model_name}_")
         logger.info(f"Created temp directory: {temp_dir}")
         
+        send_progress(request_id, 'upload', 'Saving uploaded files...', progress=10)
+        
         saved_files = save_uploaded_files(files, temp_dir)
         logger.info(f"Saved {len(saved_files)} files to temp directory")
         
-        # Find required files
+        # Find required files and send file status
+        file_status = {}
         model_pkl = None
         inference_py = None
         metadata_json = None
@@ -275,10 +309,10 @@ def register_external_model():
         
         for saved_file in saved_files:
             filepath = saved_file.get('path', '')
-            size_mb = saved_file.get('size_mb', '')
-            filename = Path(filepath).name
+            rel_path = str(Path(filepath).relative_to(temp_dir))
+            file_status[rel_path] = 'uploaded'
+            filename = Path(filepath).name  # This gets just the filename
 
-            list_the_file_names_and_sizes.append(f"{filename}: {size_mb} MB \n")
             if filename == "model.pkl":
                 model_pkl = filepath
             elif filename == "inference.py":
@@ -287,21 +321,22 @@ def register_external_model():
                 metadata_json = filepath
             elif filename == "requirements.txt":
                 requirements_txt = filepath
-
-        if model_pkl and inference_py and metadata_json and requirements_txt:
-            were_all_files_uploaded = True
-
+        
+        send_progress(request_id, 'validate', 'Files uploaded successfully', progress=20, file_status=file_status)
         
         # Register with MLflow
         exp = mlflow.set_experiment(EXPERIMENT_NAME)
         experiment_id = exp.experiment_id
         logger.info(f"Using MLflow experiment: {EXPERIMENT_NAME}")
         
+        send_progress(request_id, 'mlflow', 'Starting MLflow run...', progress=30)
+        
         with mlflow.start_run(run_name=f"{model_name}_registration_{int(time.time())}") as run:
             run_id = run.info.run_id
             logger.info(f"Started MLflow run: {run_id}")
             
             # Log parameters
+            send_progress(request_id, 'params', 'Logging parameters...', progress=40)
             mlflow.log_param("model_name", model_name)
             mlflow.log_param("experiment_id", experiment_id)
             mlflow.log_param("model_description", model_description)
@@ -313,25 +348,26 @@ def register_external_model():
             mlflow.log_param("registration_time", time.time())
             mlflow.log_param("file_count", len(saved_files))
             
-            # Log artifacts
-            # for filepath in saved_files:
-            #     rel_path = Path(filepath).relative_to(temp_dir)
-            #     artifact_dir = str(rel_path.parent) if rel_path.parent != Path(".") else None
-            #     mlflow.log_artifact(filepath, artifact_path=artifact_dir)
-            #     logger.info(f"Logged artifact: {rel_path}")
-
-            for saved_file in saved_files:
+            # Log artifacts with progress
+            send_progress(request_id, 'artifacts', 'Logging artifacts...', progress=50)
+            for i, saved_file in enumerate(saved_files):
                 filepath = saved_file["path"]
                 rel_path = Path(filepath).relative_to(temp_dir)
                 artifact_dir = str(rel_path.parent) if rel_path.parent != Path(".") else None
                 mlflow.log_artifact(filepath, artifact_path=artifact_dir)
                 logger.info(f"Logged artifact: {rel_path}")
-
+                
+                file_status[str(rel_path)] = 'logged'  # Use str(rel_path) here
+                progress_val = 50 + (i + 1) / len(saved_files) * 15
+                send_progress(request_id, 'artifacts', f'Logged {rel_path}', progress=progress_val, file_status=file_status)
+            
             # Log metadata as metrics if available
             if metadata_json:
+                send_progress(request_id, 'metadata', 'Processing metadata...', progress=65)
                 log_metadata_as_metrics(metadata_json)
             
             # Log model
+            send_progress(request_id, 'model', 'Registering model...', progress=70)
             mlflow.pyfunc.log_model(
                 artifact_path="model",
                 code_paths=[inference_py],
@@ -345,33 +381,35 @@ def register_external_model():
             )
             
             logger.info(f"Successfully logged model to MLflow")
-            logger.info(f"Run ID: {run_id}")
-            logger.info(f"Experiment: {EXPERIMENT_NAME}")
         
-        # Update model description via Domino API
+        send_progress(request_id, 'api', 'Updating model description...', progress=85)
         model_data = update_model_description(model_name, model_description)
         model_version = model_data.get("latestVersion", 1)
         
         # Create bundle
+        send_progress(request_id, 'bundle', 'Creating governance bundle...', progress=95)
         policy_id = POLICY_IDS_LIST[0] if POLICY_IDS_LIST else ""
         bundle_data = create_bundle(model_name, model_version, policy_id)
         print('bd')
         print(bundle_data)
-        
-        # Extract project owner and name from bundle_data
+        # Extract project info and construct URLs
         project_owner = bundle_data.get("projectOwner", "")
         project_name = bundle_data.get("projectName", "")
+        project_id = bundle_data.get("projectId", "")
+        policy_name = bundle_data.get("policyName", "")
         bundle_id = bundle_data.get("id", "")
         stage = bundle_data.get("stage", "").lower().replace(" ", "-")
         
-        # Construct URLs
         domain = DOMINO_DOMAIN.removeprefix("https://").removeprefix("http://")
         experiment_url = f"https://{domain}/experiments/{project_owner}/{project_name}/{experiment_id}"
         experiment_run_url = f"https://{domain}/experiments/{project_owner}/{project_name}/{experiment_id}/{run_id}"
         model_artifacts_url = f"https://{domain}/experiments/{project_owner}/{project_name}/{experiment_id}/{run_id}?isdir=false&path=model%2FMLmodel&tab=Outputs"
         model_card_url = f"https://{domain}/u/{project_owner}/{project_name}/model-registry/{model_name}/model-card?version={model_version}"
         bundle_url = f"https://{domain}/u/{project_owner}/{project_name}/governance/bundle/{bundle_id}/policy/{policy_id}/evidence/stage/{stage}"
-
+        
+        send_progress(request_id, 'complete', 'Registration complete!', progress=100)
+        send_progress(request_id, 'done', '', progress=100)  # Signal completion
+        
         # Clean up
         if temp_dir and Path(temp_dir).exists():
             shutil.rmtree(temp_dir)
@@ -395,11 +433,17 @@ def register_external_model():
                 "model_artifacts_url": model_artifacts_url,
                 "model_card_url": model_card_url,
                 "bundle_url": bundle_url,
+                "policy_name": policy_name,
+                "policy_id": policy_id,
+                "project_id": DOMINO_PROJECT_ID,
+                "project_name": project_name,
             }
         }), 200
         
     except Exception as e:
         logger.error(f"Error registering model: {e}", exc_info=True)
+        send_progress(request_id, 'error', f'Error: {str(e)}', progress=0)
+        send_progress(request_id, 'done', '', progress=0)
         
         if temp_dir and Path(temp_dir).exists():
             shutil.rmtree(temp_dir)
@@ -413,7 +457,7 @@ def register_external_model():
 def safe_domino_config():
     """Return sanitized Domino configuration for templates."""
     return {
-        "PROJECT_ID": os.environ.get("DOMINO_PROJECT_ID", ""),
+        "PROJECT_ID": DOMINO_PROJECT_ID,
         "RUN_HOST_PATH": os.environ.get("DOMINO_RUN_HOST_PATH", ""),
         "API_BASE": DOMINO_DOMAIN,
         "API_KEY": DOMINO_API_KEY,

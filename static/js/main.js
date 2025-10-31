@@ -56,14 +56,18 @@ function displayUploadedFiles() {
         return;
     }
     
-    const filesHtml = appState.uploadedFiles.map(file => `
-        <div class="file-item">
-            <div class="file-info">
-                <span class="file-name">${file.webkitRelativePath || file.name}</span>
-                <span class="file-size">${formatFileSize(file.size)}</span>
+    const filesHtml = appState.uploadedFiles.map(file => {
+        const filename = file.webkitRelativePath || file.name;
+        return `
+            <div class="file-item" data-filename="${filename}">
+                <div class="file-info">
+                    <span class="file-name">${filename}</span>
+                    <span class="file-size">${formatFileSize(file.size)}</span>
+                    <span class="file-status-check"></span>
+                </div>
             </div>
-        </div>
-    `).join('');
+        `;
+    }).join('');
     
     container.innerHTML = `
         <div class="files-list">
@@ -130,12 +134,65 @@ function showErrors(errors) {
 function showLoading(button) {
     button.disabled = true;
     button.innerHTML = '<span class="spinner"></span> Registering Model...';
+    
+    // Create progress container under the button
+    const progressContainer = document.createElement('div');
+    progressContainer.id = 'progress-container';
+    progressContainer.className = 'progress-container';
+    
+    progressContainer.innerHTML = `
+        <div class="progress-bar-container">
+            <div class="progress-bar" style="width: 0%"></div>
+        </div>
+        <div class="progress-message">Initializing...</div>
+    `;
+    
+    // Insert after the form actions
+    const formActions = document.querySelector('.form-actions');
+    formActions.after(progressContainer);
+}
+
+// Update progress
+function updateProgress(data) {
+    const progressBar = document.querySelector('.progress-bar');
+    const progressMessage = document.querySelector('.progress-message');
+    
+    if (progressBar && data.progress !== undefined) {
+        progressBar.style.width = `${data.progress}%`;
+    }
+    
+    if (progressMessage && data.message) {
+        progressMessage.textContent = data.message;
+    }
+    
+    // Update file statuses with checkmarks
+    if (data.file_status) {
+        Object.entries(data.file_status).forEach(([filename, status]) => {
+            const fileItem = document.querySelector(`.file-item[data-filename="${filename}"]`);
+            if (fileItem) {
+                const statusCheck = fileItem.querySelector('.file-status-check');
+                
+                if (status === 'uploaded' || status === 'logged') {
+                    statusCheck.innerHTML = '✓';
+                    statusCheck.classList.add('checked');
+                }
+            }
+        });
+    }
 }
 
 // Hide loading state
 function hideLoading(button) {
     button.disabled = false;
     button.innerHTML = 'Register External Model with Domino';
+    
+    const progressContainer = document.getElementById('progress-container');
+    if (progressContainer) {
+        setTimeout(() => {
+            progressContainer.style.opacity = '0';
+            setTimeout(() => progressContainer.remove(), 300);
+        }, 2000);
+    }
 }
 
 // Show success message
@@ -202,18 +259,12 @@ function showSuccess(result) {
     
     const infoHtml = result.data ? `
         <div class="model-info">
-            <h4>Model Information:</h4>
+            <h4>Registration Results:</h4>
             <div class="info-grid">
-                ${result.data.bundle_id ? `
+                ${result.data.model_name ? `
                     <div class="info-item">
-                        <span class="info-label">Bundle ID:</span>
-                        <span class="info-value">${result.data.bundle_id}</span>
-                    </div>
-                ` : ''}
-                ${result.data.bundle_name ? `
-                    <div class="info-item">
-                        <span class="info-label">Bundle Name:</span>
-                        <span class="info-value">${result.data.bundle_name}</span>
+                        <span class="info-label">Model Name:</span>
+                        <span class="info-value">${result.data.model_name}</span>
                     </div>
                 ` : ''}
                 ${result.data.model_version !== undefined ? `
@@ -222,10 +273,16 @@ function showSuccess(result) {
                         <span class="info-value">${result.data.model_version}</span>
                     </div>
                 ` : ''}
-                ${result.data.run_id ? `
+                ${result.data.bundle_name ? `
                     <div class="info-item">
-                        <span class="info-label">Experiment Run ID:</span>
-                        <span class="info-value">${result.data.run_id}</span>
+                        <span class="info-label">Bundle Name:</span>
+                        <span class="info-value">${result.data.bundle_name}</span>
+                    </div>
+                ` : ''}
+                ${result.data.bundle_id ? `
+                    <div class="info-item">
+                        <span class="info-label">Bundle ID:</span>
+                        <span class="info-value">${result.data.bundle_id}</span>
                     </div>
                 ` : ''}
                 ${result.data.experiment_name ? `
@@ -234,10 +291,34 @@ function showSuccess(result) {
                         <span class="info-value">${result.data.experiment_name}</span>
                     </div>
                 ` : ''}
-                ${result.data.model_name ? `
+                ${result.data.run_id ? `
                     <div class="info-item">
-                        <span class="info-label">Model Name:</span>
-                        <span class="info-value">${result.data.model_name}</span>
+                        <span class="info-label">Experiment Run ID:</span>
+                        <span class="info-value">${result.data.run_id}</span>
+                    </div>
+                ` : ''}
+                ${result.data.policy_name ? `
+                    <div class="info-item">
+                        <span class="info-label">Policy Name:</span>
+                        <span class="info-value">${result.data.policy_name}</span>
+                    </div>
+                ` : ''}
+                ${result.data.policy_id ? `
+                    <div class="info-item">
+                        <span class="info-label">Policy ID:</span>
+                        <span class="info-value">${result.data.policy_id}</span>
+                    </div>
+                ` : ''}
+                ${result.data.project_name ? `
+                    <div class="info-item">
+                        <span class="info-label">Project Name:</span>
+                        <span class="info-value">${result.data.project_name}</span>
+                    </div>
+                ` : ''}
+                ${result.data.project_id ? `
+                    <div class="info-item">
+                        <span class="info-label">Project ID:</span>
+                        <span class="info-value">${result.data.project_id}</span>
                     </div>
                 ` : ''}
             </div>
@@ -272,9 +353,14 @@ function resetForm() {
     showErrors([]);
     document.getElementById('success-message').innerHTML = '';
     document.getElementById('success-message').style.display = 'none';
+    
+    const progressContainer = document.getElementById('progress-container');
+    if (progressContainer) {
+        progressContainer.remove();
+    }
 }
 
-// Handle form submission
+// Handle form submission with SSE progress
 async function handleSubmit(event) {
     event.preventDefault();
     
@@ -291,10 +377,31 @@ async function handleSubmit(event) {
     const submitButton = event.target.querySelector('button[type="submit"]');
     showLoading(submitButton);
     
+    // Generate unique request ID
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    // Set up SSE for progress updates
+    const basePath = window.location.pathname.replace(/\/$/, '');
+    const eventSource = new EventSource(`${basePath}/register-progress/${requestId}`);
+    
+    eventSource.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        updateProgress(data);
+        
+        if (data.step === 'done') {
+            eventSource.close();
+        }
+    };
+    
+    eventSource.onerror = () => {
+        eventSource.close();
+    };
+    
     try {
         // Collect form data
         const formData = new FormData();
         
+        formData.append('requestId', requestId);
         formData.append('modelName', document.getElementById('model-name').value.trim());
         formData.append('modelDescription', document.getElementById('model-description').value.trim());
         formData.append('modelOwner', document.getElementById('model-owner').value.trim());
@@ -309,7 +416,6 @@ async function handleSubmit(event) {
         });
         
         // Make API call
-        const basePath = window.location.pathname.replace(/\/$/, '');
         const response = await fetch(`${basePath}/register-external-model`, {
             method: 'POST',
             body: formData
