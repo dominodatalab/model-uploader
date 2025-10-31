@@ -7,6 +7,7 @@ import shutil
 import logging
 import tempfile
 import json
+import re
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -80,40 +81,6 @@ def save_uploaded_files(files, temp_dir):
     return saved_files
 
 
-def log_metadata_as_metrics(metadata_path: str):
-    """Load metadata JSON and log all numeric values as MLflow metrics."""
-    try:
-        with open(metadata_path, 'r') as f:
-            metadata = json.load(f)
-        
-        def flatten_dict(d, parent_key='', sep='_'):
-            """Flatten nested dictionary into dot-separated keys."""
-            items = []
-            for k, v in d.items():
-                new_key = f"{parent_key}{sep}{k}" if parent_key else k
-                if isinstance(v, dict):
-                    items.extend(flatten_dict(v, new_key, sep=sep).items())
-                else:
-                    items.append((new_key, v))
-            return dict(items)
-        
-        flat_metadata = flatten_dict(metadata)
-        
-        for key, value in flat_metadata.items():
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
-                mlflow.log_metric(key, value)
-                logger.info(f"Logged metric: {key} = {value}")
-            elif isinstance(value, bool):
-                mlflow.log_metric(key, int(value))
-                logger.info(f"Logged metric: {key} = {int(value)}")
-            else:
-                mlflow.log_param(key, str(value))
-                logger.info(f"Logged param: {key} = {value}")
-                
-    except Exception as e:
-        logger.warning(f"Could not log metadata as metrics: {e}")
-
-
 def update_model_description(model_name: str, description: str) -> dict:
     """Update model description via Domino API and return full response."""
     domain = DOMINO_DOMAIN.removeprefix("https://").removeprefix("http://")
@@ -137,6 +104,58 @@ def update_model_description(model_name: str, description: str) -> dict:
         return model_data
     except requests.RequestException as e:
         logger.error(f"Failed to update model description: {e}")
+        raise
+
+
+def normalize_label(label: str) -> str:
+    """Transform label to match evidence variable names."""
+    normalized = label.lower()
+    normalized = re.sub(r'[^\w\s]', '', normalized)
+    normalized = re.sub(r'\s+', '_', normalized)
+    return normalized
+
+
+def get_policy_details(policy_id: str) -> dict:
+    """Get policy details including classification artifact map."""
+    domain = DOMINO_DOMAIN.removeprefix("https://").removeprefix("http://")
+    url = f"https://{domain}/api/governance/v1/policies/{policy_id}"
+    headers = {
+        "accept": "application/json",
+        "X-Domino-Api-Key": DOMINO_API_KEY
+    }
+    
+    try:
+        logger.info(f"Getting policy details for policy ID: {policy_id}")
+        response = requests.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+        policy_data = response.json()
+        logger.info(f"Successfully retrieved policy: {policy_data.get('name')}")
+        
+        # Extract unique tuples
+        tuples = []
+        policy_id_from_response = policy_data.get("id")
+        stages = policy_data.get("stages", [])
+        
+        for stage in stages:
+            for evidence in stage.get("evidenceSet", []):
+                evidence_id = evidence.get("id")
+                for artifact in evidence.get("artifacts", []):
+                    artifact_id = artifact.get("id")
+                    label = artifact.get("details", {}).get("label")
+                    input_type = artifact.get("details", {}).get("type")
+                    if policy_id_from_response and evidence_id and artifact_id and label and input_type:
+                        tuples.append((policy_id_from_response, evidence_id, artifact_id, label, input_type))
+        
+        # Remove duplicates
+        unique_tuples = list(dict.fromkeys(tuples))
+        
+        print("Unique Policy Artifact Tuples:")
+        for t in unique_tuples:
+            print(t)
+        
+        return policy_data
+    except requests.RequestException as e:
+        logger.error(f"Failed to get policy details: {e}")
         raise
 
 
@@ -176,6 +195,66 @@ def create_bundle(model_name: str, model_version: int, policy_id: str) -> dict:
     except requests.RequestException as e:
         logger.error(f"Failed to create bundle: {e}")
         raise
+
+
+def submit_artifacts_to_policy(bundle_id: str, policy_id: str, matched_artifacts: list) -> dict:
+    """Submit all artifacts to policy in a single batch call."""
+    domain = DOMINO_DOMAIN.removeprefix("https://").removeprefix("http://")
+    url = f"https://{domain}/api/governance/v1/rpc/submit-result-to-policy"
+    headers = {
+        "accept": "application/json",
+        "Content-Type": "application/json",
+        "X-Domino-Api-Key": DOMINO_API_KEY
+    }
+    
+    # Group artifacts by evidence_id to make multiple calls if needed
+    evidence_groups = {}
+    for artifact in matched_artifacts:
+        if artifact['value'] is not None:  # Only submit non-None values
+            evidence_id = artifact['evidence_id']
+            if evidence_id not in evidence_groups:
+                evidence_groups[evidence_id] = []
+            evidence_groups[evidence_id].append(artifact)
+    
+    logger.info(f"Submitting {len(matched_artifacts)} artifacts across {len(evidence_groups)} evidence sets")
+    
+    results = []
+    for evidence_id, artifacts in evidence_groups.items():
+        # Build content dict for this evidence group
+        content = {}
+        for artifact in artifacts:
+            artifact_id = artifact['artifact_id']
+            value = artifact['value']
+            
+            # Convert value based on input type
+            if artifact['input_type'] == 'radio':
+                if isinstance(value, bool):
+                    content[artifact_id] = "Yes" if value else "No"
+                else:
+                    content[artifact_id] = str(value)
+            else:
+                content[artifact_id] = str(value)
+        
+        payload = {
+            "bundleId": bundle_id,
+            "content": content,
+            "evidenceId": evidence_id,
+            "policyId": policy_id
+        }
+        
+        try:
+            logger.info(f"Submitting evidence group {evidence_id} with {len(content)} artifacts")
+            response = requests.post(url, json=payload, headers=headers, timeout=30)
+            response.raise_for_status()
+            result_data = response.json()
+            results.append(result_data)
+            logger.info(f"Successfully submitted evidence group {evidence_id}")
+        except requests.RequestException as e:
+            logger.error(f"Failed to submit evidence group {evidence_id}: {e}")
+            raise
+    
+    # Return the last result (or could aggregate all results)
+    return results[-1] if results else {}
 
 
 @app.route("/_stcore/health")
@@ -290,6 +369,11 @@ def register_external_model():
         if not all(required_fields):
             return jsonify({"status": "error", "message": "Missing required fields"}), 400
         
+        # Get policy details
+        policy_id = POLICY_IDS_LIST[0] if POLICY_IDS_LIST else ""
+        send_progress(request_id, 'policy', 'Retrieving policy details...', progress=5)
+        policy_data = get_policy_details(policy_id)
+        
         # Save uploaded files
         files = request.files.getlist('files')
         temp_dir = tempfile.mkdtemp(prefix=f"external_model_{model_name}_")
@@ -306,12 +390,16 @@ def register_external_model():
         inference_py = None
         metadata_json = None
         requirements_txt = None
-        
+
+        list_the_file_names_and_sizes = ''
         for saved_file in saved_files:
             filepath = saved_file.get('path', '')
+            filesize = saved_file.get('size_mb', '')
             rel_path = str(Path(filepath).relative_to(temp_dir))
             file_status[rel_path] = 'uploaded'
-            filename = Path(filepath).name  # This gets just the filename
+            filename = Path(filepath).name
+            
+            list_the_file_names_and_sizes += f"{filename}  -  {filesize}MB\n"
 
             if filename == "model.pkl":
                 model_pkl = filepath
@@ -357,17 +445,12 @@ def register_external_model():
                 mlflow.log_artifact(filepath, artifact_path=artifact_dir)
                 logger.info(f"Logged artifact: {rel_path}")
                 
-                file_status[str(rel_path)] = 'logged'  # Use str(rel_path) here
+                file_status[str(rel_path)] = 'logged'
                 progress_val = 50 + (i + 1) / len(saved_files) * 15
                 send_progress(request_id, 'artifacts', f'Logged {rel_path}', progress=progress_val, file_status=file_status)
-            
-            # Log metadata as metrics if available
-            if metadata_json:
-                send_progress(request_id, 'metadata', 'Processing metadata...', progress=65)
-                log_metadata_as_metrics(metadata_json)
-            
+                        
             # Log model
-            send_progress(request_id, 'model', 'Registering model...', progress=70)
+            send_progress(request_id, 'model', 'Registering model...', progress=67)
             mlflow.pyfunc.log_model(
                 artifact_path="model",
                 code_paths=[inference_py],
@@ -382,16 +465,16 @@ def register_external_model():
             
             logger.info(f"Successfully logged model to MLflow")
         
-        send_progress(request_id, 'api', 'Updating model description...', progress=85)
+        send_progress(request_id, 'api', 'Updating model description...', progress=75)
         model_data = update_model_description(model_name, model_description)
         model_version = model_data.get("latestVersion", 1)
         
         # Create bundle
-        send_progress(request_id, 'bundle', 'Creating governance bundle...', progress=95)
-        policy_id = POLICY_IDS_LIST[0] if POLICY_IDS_LIST else ""
+        send_progress(request_id, 'bundle', 'Creating governance bundle...', progress=80)
         bundle_data = create_bundle(model_name, model_version, policy_id)
         print('bd')
         print(bundle_data)
+
         # Extract project info and construct URLs
         project_owner = bundle_data.get("projectOwner", "")
         project_name = bundle_data.get("projectName", "")
@@ -406,9 +489,64 @@ def register_external_model():
         model_artifacts_url = f"https://{domain}/experiments/{project_owner}/{project_name}/{experiment_id}/{run_id}?isdir=false&path=model%2FMLmodel&tab=Outputs"
         model_card_url = f"https://{domain}/u/{project_owner}/{project_name}/model-registry/{model_name}/model-card?version={model_version}"
         bundle_url = f"https://{domain}/u/{project_owner}/{project_name}/governance/bundle/{bundle_id}/policy/{policy_id}/evidence/stage/{stage}"
+
+        were_all_the_files_uploaded = True
         
+        evidence_variables = {
+            'model_name': model_name,
+            'model_description': model_description,
+            'model_owner': model_owner,
+            'model_use_case': model_use_case,
+            'model_usage_pattern': model_usage_pattern,
+            'model_environment_id': model_environment_id,
+            'model_execution_script': model_execution_script,
+            'list_the_file_names_and_sizes': list_the_file_names_and_sizes,
+            'were_all_files_uploaded': were_all_the_files_uploaded
+        }
+        
+        # Match artifacts with evidence variables
+        stages = policy_data.get("stages", [])
+        
+        matched_artifacts = []
+        seen_keys = set()
+        
+        for stage in stages:
+            for evidence in stage.get("evidenceSet", []):
+                evidence_id = evidence.get("id")
+                for artifact in evidence.get("artifacts", []):
+                    artifact_id = artifact.get("id")
+                    label = artifact.get("details", {}).get("label")
+                    input_type = artifact.get("details", {}).get("type")
+                    
+                    if policy_id and evidence_id and artifact_id and label and input_type:
+                        unique_key = (policy_id, evidence_id, artifact_id, label, input_type)
+                        
+                        if unique_key not in seen_keys:
+                            seen_keys.add(unique_key)
+                            normalized_key = normalize_label(label)
+                            value = evidence_variables.get(normalized_key)
+                            
+                            matched_artifacts.append({
+                                'bundle_id': bundle_id,
+                                'policy_id': policy_id,
+                                'evidence_id': evidence_id,
+                                'artifact_id': artifact_id,
+                                'label': label,
+                                'input_type': input_type,
+                                'value': value
+                            })
+        
+        print("\nMatched Policy Artifacts with Evidence Variables:")
+        for artifact in matched_artifacts:
+            print(artifact)
+
+        # Submit artifacts to policy
+        send_progress(request_id, 'evidence', 'Submitting evidence to policy...', progress=90)
+        policy_submission_result = submit_artifacts_to_policy(bundle_id, policy_id, matched_artifacts)
+        logger.info(f"Successfully submitted {len(matched_artifacts)} artifacts to policy")
+
         send_progress(request_id, 'complete', 'Registration complete!', progress=100)
-        send_progress(request_id, 'done', '', progress=100)  # Signal completion
+        send_progress(request_id, 'done', '', progress=100)
         
         # Clean up
         if temp_dir and Path(temp_dir).exists():
@@ -437,6 +575,7 @@ def register_external_model():
                 "policy_id": policy_id,
                 "project_id": DOMINO_PROJECT_ID,
                 "project_name": project_name,
+                "artifacts_submitted": len([a for a in matched_artifacts if a['value'] is not None])
             }
         }), 200
         

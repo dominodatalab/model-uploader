@@ -181,20 +181,6 @@ body {
   min-height: 100px;
 }
 
-.form-group input[type="file"] {
-  padding: var(--sp-3);
-  border: 2px dashed var(--border);
-  border-radius: var(--r-xs);
-  cursor: pointer;
-  width: 100%;
-  font-size: var(--fs-14);
-}
-
-.form-group input[type="file"]:hover {
-  border-color: var(--brand);
-  background: color-mix(in srgb, var(--brand) 3%, transparent);
-}
-
 .help-text {
   margin-top: var(--sp-2);
   font-size: var(--fs-12);
@@ -305,6 +291,25 @@ body {
 
 .btn-secondary:hover:not(:disabled) {
   filter: brightness(0.98);
+}
+
+.btn-upload {
+  width: 100%;
+  background: var(--panel);
+  color: var(--brand);
+  border: 2px dashed var(--border);
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.btn-upload:hover {
+  border-color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 3%, transparent);
+}
+
+.btn-upload:focus-visible {
+  border-color: var(--brand);
+  outline: var(--focus);
 }
 
 /* ---------- Spinner ---------- */
@@ -530,6 +535,55 @@ body {
   color: var(--stop-fg);
 }
 
+/* ---------- Progress Container ---------- */
+.progress-container {
+    margin-top: var(--sp-4);
+    padding: var(--sp-4);
+    background: var(--subtle-2);
+    border-radius: var(--r-xs);
+    border: 1px solid var(--border);
+    transition: opacity 0.3s ease;
+}
+
+.progress-bar-container {
+    width: 100%;
+    height: 4px;
+    background: var(--subtle);
+    border-radius: var(--r-full);
+    overflow: hidden;
+    margin-bottom: var(--sp-2);
+}
+
+.progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--brand), var(--accent));
+    border-radius: var(--r-full);
+    transition: width 0.3s ease;
+}
+
+.progress-message {
+    font-size: var(--fs-12);
+    color: var(--muted);
+    font-style: italic;
+    text-align: center;
+}
+
+/* ---------- File Status Check ---------- */
+
+@keyframes checkPop {
+  0% { 
+    transform: scale(0.7);
+    opacity: 0;
+  }
+  50% { 
+    transform: scale(1.15);
+  }
+  100% { 
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
 /* ---------- Responsive ---------- */
 @media (max-width: 1400px) {
   .form-layout {
@@ -570,8 +624,6 @@ body {
   }
 }
 
-You're right - let me refactor the progress styles to match your existing design tokens and aesthetic. Here's the updated CSS that fits seamlessly with your Domino-ish theme:
-css/* ---------- Progress Container ---------- */
 .progress-container {
   background: var(--panel);
   border-radius: var(--r-md);
@@ -703,7 +755,7 @@ css/* ---------- Progress Container ---------- */
 
 /* ---------- File Status Check ---------- */
 .file-status-check {
-    margin-left: auto;
+    margin-left: 4px;
     color: var(--ok-fg);
     font-size: var(--fs-16);
     font-weight: 700;
