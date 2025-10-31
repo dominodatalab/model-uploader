@@ -1,6 +1,0 @@
-README.md
-setup.py
-localapp.egg-info/PKG-INFO
-localapp.egg-info/SOURCES.txt
-localapp.egg-info/dependency_links.txt
-localapp.egg-info/top_level.txt
