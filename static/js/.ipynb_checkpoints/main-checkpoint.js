@@ -219,6 +219,13 @@ function showSuccess(result) {
             <h4>Quick Links:</h4>
             <div class="link-buttons-grid">
                 ${result.data.bundle_url ? `
+                    <a href="${result.data.security_scan_url}" target="_blank" rel="noopener noreferrer" class="link-button">
+                        <i class="icon fas fa-clipboard-list"></i>
+                        <span>Security Scan</span>
+                        <i class="external-icon fas fa-external-link-alt"></i>
+                    </a>
+                ` : ''}
+                ${result.data.bundle_url ? `
                     <a href="${result.data.bundle_url}" target="_blank" rel="noopener noreferrer" class="link-button">
                         <i class="icon fas fa-clipboard-list"></i>
                         <span>Intake Bundle</span>
