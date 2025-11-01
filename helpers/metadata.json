@@ -1,0 +1,77 @@
+{
+  "model_name": "Market_Regime_Classifier",
+  "version": "1.0.0",
+  "description": "Market regime classification model that predicts Bull, Bear, Sideways, or High Volatility market conditions based on returns, volatility, and volume patterns.",
+  "framework": {
+    "name": "scikit-learn",
+    "version": "1.3.2"
+  },
+  "artifact": "model.pkl",
+  "entrypoint": "inference.py",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "returns": {
+        "type": "number",
+        "description": "Daily return as decimal (e.g., 0.02 for 2%)"
+      },
+      "volatility": {
+        "type": "number",
+        "description": "Volatility measure (0.0 to 1.0)"
+      },
+      "volume_ratio": {
+        "type": "number",
+        "description": "Volume relative to average (typically 0.5 to 2.0)"
+      }
+    },
+    "required": [
+      "returns",
+      "volatility",
+      "volume_ratio"
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "regime": {
+        "type": "integer",
+        "description": "0=Bull, 1=Bear, 2=Sideways, 3=High Volatility"
+      },
+      "regime_name": {
+        "type": "string"
+      },
+      "probability": {
+        "type": "array",
+        "description": "Probability for each regime class"
+      }
+    }
+  },
+  "training_metadata": {
+    "dataset": "synthetic_market_data",
+    "target_column": "regime",
+    "n_samples": 5000,
+    "regime_labels": {
+      "0": "Bull Market",
+      "1": "Bear Market",
+      "2": "Sideways Market",
+      "3": "High Volatility"
+    },
+    "metrics": {
+      "accuracy": 1.0,
+      "f1_score": 1.0
+    },
+    "training_date": "2025-11-01T14:06:35Z",
+    "trained_by": "data.science@example.com"
+  },
+  "source": {
+    "environment": "local development",
+    "tool": "Python script",
+    "repository": "https://github.com/example/regime-classifier"
+  },
+  "governance": {
+    "model_owner": "Data Science Team",
+    "risk_tier": "Medium",
+    "validation_required": true,
+    "external_upload": true
+  }
+}

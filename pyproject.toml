@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "localapp"
+version = "0.1.0"
+description = ""
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [{ name = "Nick Goble" }]
+dependencies = [
+    # "flask",
+    # "mlflow>=2.0",
+]
+
+[tool.setuptools]
+packages = ["localapp"]
