@@ -3,7 +3,7 @@ set -euo pipefail
 
 # usage: PORT=8501 bash app.sh
 PORT="${PORT:-${1:-8888}}"
-DOMINO_DOMAIN="${DOMINO_DOMAIN:-https://fitch.domino-eval.com}"
+DOMINO_DOMAIN="${DOMINO_DOMAIN:-https://se-demo.domino.tech}"
 
 # 1) Kill anything listening on $PORT via fuser (works where ss/lsof aren’t available)
 if command -v fuser &>/dev/null; then

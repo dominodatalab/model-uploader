@@ -4,6 +4,7 @@ import logging
 import subprocess
 from datetime import datetime
 from pathlib import Path
+import multiprocessing
 
 logger = logging.getLogger(__name__)
 
@@ -75,20 +76,17 @@ def run_semgrep_scan(target_dir, config=DEFAULT_SEMGREP_CONFIG, timeout_sec=300)
     if not ok:
         raise RuntimeError(f"Semgrep not available: {msg}")
 
+    cpu_count = str(max(1, min(multiprocessing.cpu_count(), 8)))
+
     cmd = [
         "semgrep",
         "--config", config,
         "--json",
-        "--no-git-ignore",
-        "--exclude", "*/tests/*",
-        "--exclude", "*/test*/*", 
-        "--exclude", "*/.git/*",
-        "--exclude", "*/venv/*",
-        "--exclude", "*/env/*",
-        "--exclude", "*/__pycache__/*",
+        "--jobs", cpu_count,
+        "--exclude", "venv,node_modules,build,dist",
         target_dir
     ]
-    
+
     logger.info(f"Running semgrep scan: {' '.join(cmd)}")
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec)
     

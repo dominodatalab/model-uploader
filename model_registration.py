@@ -75,6 +75,36 @@ def upload_file_to_project(project_id: str, local_path: str, remote_path: str) -
         logger.error(f"Failed to upload {local_path} to project: {e}")
         raise
 
+def attach_report_to_bundle(bundle_id: str, filename: str, commit_key: str) -> dict:
+    """Attach a report (HTML or PDF) to a governance bundle."""
+    domain = DOMINO_DOMAIN.removeprefix("https://").removeprefix("http://")
+    url = f"https://{domain}/api/governance/v1/bundles/{bundle_id}/attachments"
+    headers = {
+        "accept": "application/json",
+        "Content-Type": "application/json",
+        "X-Domino-Api-Key": DOMINO_API_KEY
+    }
+    payload = {
+        "identifier": {
+            "branch": "master",
+            "commit": commit_key,
+            "source": "DFS",
+            "filename": filename
+        },
+        "type": "Report"
+    }
+
+    try:
+        logger.info(f"Attaching report {filename} (commit={commit_key}) to bundle {bundle_id}")
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        result = response.json()
+        logger.info(f"Successfully attached report to bundle: {result.get('id')}")
+        return result
+    except requests.RequestException as e:
+        logger.error(f"Failed to attach {filename} to bundle: {e}")
+        raise
+
 
 def save_uploaded_files(files, temp_dir):
     """Save uploaded files to temp directory maintaining structure."""
@@ -158,9 +188,9 @@ def get_policy_details(policy_id: str) -> dict:
         
         unique_tuples = list(dict.fromkeys(tuples))
         
-        print("Unique Policy Artifact Tuples:")
-        for t in unique_tuples:
-            print(t)
+        # print("Unique Policy Artifact Tuples:")
+        # for t in unique_tuples:
+        #     print(t)
         
         return policy_data
     except requests.RequestException as e:
@@ -325,17 +355,12 @@ def register_model_handler(request, progress_queues):
         send_progress(request_id, 'validate', 'Files uploaded successfully', progress_queues, progress=20, file_status=file_status)
         
         send_progress(request_id, 'security', 'Running security scan...', progress_queues, progress=25)
-        security_scan_summary = None
-        try:
-            logger.info(f"Starting security scan on {temp_dir}")
-            semgrep_raw = run_semgrep_scan(temp_dir, config=DEFAULT_SEMGREP_CONFIG, timeout_sec=300)
-            security_scan_summary = summarize_semgrep(semgrep_raw)
-            logger.info(f"Security scan complete: {security_scan_summary['total_issues']} issues found")
-            logger.info(f"  HIGH: {security_scan_summary['high']}, MEDIUM: {security_scan_summary['medium']}, LOW: {security_scan_summary['low']}")
-            send_progress(request_id, 'security', f"Security scan complete: {security_scan_summary['total_issues']} issues found", progress_queues, progress=30)
-        except Exception as e:
-            logger.warning(f"Security scan failed (non-fatal): {e}")
-            send_progress(request_id, 'security', f"Security scan skipped: {str(e)}", progress_queues, progress=30)
+
+        logger.info(f"Starting security scan on {temp_dir}")
+        semgrep_raw = run_semgrep_scan(temp_dir, config=DEFAULT_SEMGREP_CONFIG, timeout_sec=300)
+        security_scan_summary = summarize_semgrep(semgrep_raw)
+        logger.info(f"Security scan complete: {security_scan_summary['total_issues']} issues found")
+        send_progress(request_id, 'security', f"Security scan complete: {security_scan_summary['total_issues']} issues found", progress_queues, progress=30)
         
         exp = mlflow.set_experiment(EXPERIMENT_NAME)
         experiment_id = exp.experiment_id
@@ -359,11 +384,10 @@ def register_model_handler(request, progress_queues):
             mlflow.log_param("registration_time", time.time())
             mlflow.log_param("file_count", len(saved_files))
             
-            if security_scan_summary:
-                mlflow.log_param("security_scan_total_issues", security_scan_summary['total_issues'])
-                mlflow.log_param("security_scan_high", security_scan_summary['high'])
-                mlflow.log_param("security_scan_medium", security_scan_summary['medium'])
-                mlflow.log_param("security_scan_low", security_scan_summary['low'])
+            mlflow.log_param("security_scan_total_issues", security_scan_summary['total_issues'])
+            mlflow.log_param("security_scan_high", security_scan_summary['high'])
+            mlflow.log_param("security_scan_medium", security_scan_summary['medium'])
+            mlflow.log_param("security_scan_low", security_scan_summary['low'])
             
             send_progress(request_id, 'artifacts', 'Logging artifacts...', progress_queues, progress=55)
             for i, saved_file in enumerate(saved_files):
@@ -377,40 +401,39 @@ def register_model_handler(request, progress_queues):
                 progress_val = 55 + (i + 1) / len(saved_files) * 10
                 send_progress(request_id, 'artifacts', f'Logged {rel_path}', progress_queues, progress=progress_val, file_status=file_status)
             
-            if security_scan_summary and security_scan_summary['issues']:
-                send_progress(request_id, 'security_log', 'Logging security scan results...', progress_queues, progress=66)
-                
-                # Save JSON report
-                security_report_json_path = Path(temp_dir) / "security_scan_report.json"
-                with open(security_report_json_path, 'w') as f:
-                    json.dump(security_scan_summary, f, indent=2)
-                mlflow.log_artifact(str(security_report_json_path), artifact_path="security")
-                logger.info("Logged security scan JSON report")
-                
-                # Generate and save HTML report
-                html_report = generate_html_report(
-                    security_scan_summary,
-                    model_name=model_name,
-                    scan_metadata={
-                        'model_owner': model_owner,
-                        'model_use_case': model_use_case
-                    }
-                )
-                security_report_html_path = Path(temp_dir) / "security_scan_report.html"
-                with open(security_report_html_path, 'w', encoding='utf-8') as f:
-                    f.write(html_report)
-                mlflow.log_artifact(str(security_report_html_path), artifact_path="security")
-                logger.info("Logged security scan HTML report")
-                
-                # Generate PDF from HTML
-                try:
-                    from security_scan import generate_pdf_from_html
-                    security_report_pdf_path = Path(temp_dir) / "security_scan_report.pdf"
-                    generate_pdf_from_html(str(security_report_html_path), str(security_report_pdf_path))
-                    mlflow.log_artifact(str(security_report_pdf_path), artifact_path="security")
-                    logger.info("Logged security scan PDF report")
-                except Exception as e:
-                    logger.warning(f"Failed to generate PDF report (non-fatal): {e}")
+            send_progress(request_id, 'security_log', 'Logging security scan results...', progress_queues, progress=66)
+            
+            # Save JSON report
+            security_report_json_path = Path(temp_dir) / "security_scan_report.json"
+            with open(security_report_json_path, 'w') as f:
+                json.dump(security_scan_summary, f, indent=2)
+            mlflow.log_artifact(str(security_report_json_path), artifact_path="security")
+            logger.info("Logged security scan JSON report")
+            
+            # Generate and save HTML report
+            html_report = generate_html_report(
+                security_scan_summary,
+                model_name=model_name,
+                scan_metadata={
+                    'model_owner': model_owner,
+                    'model_use_case': model_use_case
+                }
+            )
+            security_report_html_path = Path(temp_dir) / "security_scan_report.html"
+            with open(security_report_html_path, 'w', encoding='utf-8') as f:
+                f.write(html_report)
+            mlflow.log_artifact(str(security_report_html_path), artifact_path="security")
+            logger.info("Logged security scan HTML report")
+            
+            # Generate PDF from HTML
+            try:
+                from security_scan import generate_pdf_from_html
+                security_report_pdf_path = Path(temp_dir) / "security_scan_report.pdf"
+                generate_pdf_from_html(str(security_report_html_path), str(security_report_pdf_path))
+                mlflow.log_artifact(str(security_report_pdf_path), artifact_path="security")
+                logger.info("Logged security scan PDF report")
+            except Exception as e:
+                logger.warning(f"Failed to generate PDF report (non-fatal): {e}")
 
             send_progress(request_id, 'model', 'Registering model...', progress_queues, progress=70)
             mlflow.pyfunc.log_model(
@@ -434,33 +457,38 @@ def register_model_handler(request, progress_queues):
         send_progress(request_id, 'bundle', 'Creating governance bundle...', progress_queues, progress=80)
         bundle_data = create_bundle(model_name, model_version, policy_id)
         bundle_name = bundle_data.get("name", "")
-        html_remote_path = f"security_scans/{bundle_name}_security_report.html"
-        pdf_remote_path = f"security_scans/{bundle_name}_security_report.pdf"
-
-        if security_scan_summary and security_scan_summary['issues']:
-            try:
-        
-                html_upload_result = upload_file_to_project(DOMINO_PROJECT_ID, str(security_report_html_path), html_remote_path)
-                pdf_upload_result = upload_file_to_project(DOMINO_PROJECT_ID, str(security_report_pdf_path), pdf_remote_path)
-        
-                project_upload_records["html"] = html_upload_result
-                project_upload_records["pdf"] = pdf_upload_result
-        
-                logger.info("Security reports successfully uploaded to Domino project repository.")
-            except Exception as e:
-                logger.error(f"Failed to upload security reports to project: {e}")
-
-        
-        print('bd')
-        print(bundle_data)
-
+        bundle_id = bundle_data.get("id", "")
         project_owner = bundle_data.get("projectOwner", "")
         project_name = bundle_data.get("projectName", "")
         project_id = bundle_data.get("projectId", "")
         policy_name = bundle_data.get("policyName", "")
-        bundle_id = bundle_data.get("id", "")
         stage = bundle_data.get("stage", "").lower().replace(" ", "-")
-        
+        html_remote_path = f"security_scans/{bundle_name}_security_report.html"
+        pdf_remote_path = f"security_scans/{bundle_name}_security_report.pdf"
+
+        try:
+            html_upload_result = upload_file_to_project(DOMINO_PROJECT_ID, str(security_report_html_path), html_remote_path)
+            pdf_upload_result = upload_file_to_project(DOMINO_PROJECT_ID, str(security_report_pdf_path), pdf_remote_path)
+    
+            logger.info("Security reports successfully uploaded to Domino project repository.")
+            print('html upload result', html_upload_result)
+            print('pdf upload result', pdf_upload_result)
+    
+            # Extract commit keys and paths for attachments
+            html_commit = html_upload_result.get("key")
+            pdf_commit = pdf_upload_result.get("key")
+            html_filename = html_upload_result.get("path")
+            pdf_filename = pdf_upload_result.get("path")
+    
+            # Attach reports to governance bundle
+            html_attachment = attach_report_to_bundle(bundle_id, html_filename, html_commit)
+            pdf_attachment = attach_report_to_bundle(bundle_id, pdf_filename, pdf_commit)
+    
+            logger.info(f"Attached reports to bundle {bundle_id}: HTML({html_attachment.get('id')}), PDF({pdf_attachment.get('id')})")
+    
+        except Exception as e:
+            logger.error(f"Failed to upload or attach security reports to bundle: {e}", exc_info=True)
+
         domain = DOMINO_DOMAIN.removeprefix("https://").removeprefix("http://")
         experiment_url = f"https://{domain}/experiments/{project_owner}/{project_name}/{experiment_id}"
         experiment_run_url = f"https://{domain}/experiments/{project_owner}/{project_name}/{experiment_id}/{run_id}"
@@ -482,13 +510,7 @@ def register_model_handler(request, progress_queues):
             'list_the_file_names_and_sizes': list_the_file_names_and_sizes,
             'were_all_files_uploaded': were_all_the_files_uploaded
         }
-        
-        if security_scan_summary:
-            evidence_variables['security_scan_total_issues'] = security_scan_summary['total_issues']
-            evidence_variables['security_scan_high'] = security_scan_summary['high']
-            evidence_variables['security_scan_medium'] = security_scan_summary['medium']
-            evidence_variables['security_scan_low'] = security_scan_summary['low']
-        
+                
         stages = policy_data.get("stages", [])
         
         matched_artifacts = []
