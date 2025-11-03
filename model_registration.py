@@ -1,3 +1,4 @@
+# model_registration.py
 import os
 import hashlib
 import base64
@@ -8,11 +9,16 @@ import logging
 import tempfile
 import json
 import re
+import pickle
 from pathlib import Path
+import joblib
 
 import requests
 import mlflow
+import pandas as pd
 from flask import jsonify
+from mlflow.pyfunc import PythonModel
+from mlflow.models.signature import infer_signature
 
 from security_scan import run_semgrep_scan, summarize_semgrep, generate_html_report, generate_pdf_from_html, DEFAULT_SEMGREP_CONFIG
 
@@ -41,6 +47,28 @@ def domino_short_id(length: int = 8) -> str:
 EXPERIMENT_NAME = f"external_models_{domino_short_id(4)}"
 
 
+def _create_pickle_pyfunc():
+    """Factory function to create PicklePyFunc class without module dependencies."""
+    import pickle
+    import pandas as pd
+    from mlflow.pyfunc import PythonModel
+    
+    class PicklePyFunc(PythonModel):
+        """MLflow PyFunc wrapper for pickle models."""
+        
+        def load_context(self, context):
+            with open(context.artifacts["model_pkl"], "rb") as f:
+                self._model = pickle.load(f)
+        
+        def predict(self, context, model_input):
+            X = model_input if isinstance(model_input, pd.DataFrame) else pd.DataFrame(model_input)
+            if hasattr(self._model, "predict_proba"):
+                return self._model.predict_proba(X)
+            return self._model.predict(X)
+    
+    return PicklePyFunc()
+
+
 def send_progress(request_id, step, message, progress_queues, progress=None, file_status=None):
     """Send progress update to the frontend."""
     if request_id in progress_queues:
@@ -50,6 +78,7 @@ def send_progress(request_id, step, message, progress_queues, progress=None, fil
             'progress': progress,
             'file_status': file_status
         })
+
 
 def upload_file_to_project(project_id: str, local_path: str, remote_path: str) -> dict:
     """Upload a file to the head commit of the project repository."""
@@ -74,6 +103,7 @@ def upload_file_to_project(project_id: str, local_path: str, remote_path: str) -
     except requests.RequestException as e:
         logger.error(f"Failed to upload {local_path} to project: {e}")
         raise
+
 
 def attach_report_to_bundle(bundle_id: str, filename: str, commit_key: str) -> dict:
     """Attach a report (HTML or PDF) to a governance bundle."""
@@ -187,10 +217,6 @@ def get_policy_details(policy_id: str) -> dict:
                         tuples.append((policy_id_from_response, evidence_id, artifact_id, label, input_type))
         
         unique_tuples = list(dict.fromkeys(tuples))
-        
-        # print("Unique Policy Artifact Tuples:")
-        # for t in unique_tuples:
-        #     print(t)
         
         return policy_data
     except requests.RequestException as e:
@@ -329,9 +355,9 @@ def register_model_handler(request, progress_queues):
         
         file_status = {}
         model_pkl = None
-        inference_py = None
         metadata_json = None
         requirements_txt = None
+        signature_pkl = None
 
         list_the_file_names_and_sizes = ''
         for saved_file in saved_files:
@@ -345,17 +371,19 @@ def register_model_handler(request, progress_queues):
 
             if filename == "model.pkl":
                 model_pkl = filepath
-            elif filename == "inference.py":
-                inference_py = filepath
             elif filename == "metadata.json":
                 metadata_json = filepath
             elif filename == "requirements.txt":
                 requirements_txt = filepath
-        
+            elif filename == "signature.pkl":
+                signature_pkl = filepath
+
+        if not model_pkl:
+            return jsonify({"status": "error", "message": "model.pkl is required"}), 400
+
         send_progress(request_id, 'validate', 'Files uploaded successfully', progress_queues, progress=20, file_status=file_status)
         
         send_progress(request_id, 'security', 'Running security scan...', progress_queues, progress=25)
-
         logger.info(f"Starting security scan on {temp_dir}")
         semgrep_raw = run_semgrep_scan(temp_dir, config=DEFAULT_SEMGREP_CONFIG, timeout_sec=300)
         security_scan_summary = summarize_semgrep(semgrep_raw)
@@ -403,14 +431,12 @@ def register_model_handler(request, progress_queues):
             
             send_progress(request_id, 'security_log', 'Logging security scan results...', progress_queues, progress=66)
             
-            # Save JSON report
             security_report_json_path = Path(temp_dir) / "security_scan_report.json"
             with open(security_report_json_path, 'w') as f:
                 json.dump(security_scan_summary, f, indent=2)
             mlflow.log_artifact(str(security_report_json_path), artifact_path="security")
             logger.info("Logged security scan JSON report")
             
-            # Generate and save HTML report
             html_report = generate_html_report(
                 security_scan_summary,
                 model_name=model_name,
@@ -425,9 +451,7 @@ def register_model_handler(request, progress_queues):
             mlflow.log_artifact(str(security_report_html_path), artifact_path="security")
             logger.info("Logged security scan HTML report")
             
-            # Generate PDF from HTML
             try:
-                from security_scan import generate_pdf_from_html
                 security_report_pdf_path = Path(temp_dir) / "security_scan_report.pdf"
                 generate_pdf_from_html(str(security_report_html_path), str(security_report_pdf_path))
                 mlflow.log_artifact(str(security_report_pdf_path), artifact_path="security")
@@ -436,19 +460,48 @@ def register_model_handler(request, progress_queues):
                 logger.warning(f"Failed to generate PDF report (non-fatal): {e}")
 
             send_progress(request_id, 'model', 'Registering model...', progress_queues, progress=70)
-            mlflow.pyfunc.log_model(
+
+            if signature_pkl:
+                signature = joblib.load(signature_pkl)
+            else:
+                with open(model_pkl, "rb") as f:
+                    loaded_model = pickle.load(f)
+                
+                # Create sample data for signature inference
+                if hasattr(loaded_model, 'n_features_in_'):
+                    n_features = loaded_model.n_features_in_
+                    X_sample = pd.DataFrame([[0.0] * n_features])
+                else:
+                    X_sample = pd.DataFrame([[0.0, 0.0, 0.0]])
+                
+                # Infer signature
+                if hasattr(loaded_model, "predict_proba"):
+                    y_sample = loaded_model.predict_proba(X_sample)
+                else:
+                    y_sample = loaded_model.predict(X_sample)
+                signature = infer_signature(X_sample, y_sample)
+                
+            # Prepare pip requirements
+            if requirements_txt:
+                pip_reqs = requirements_txt
+            else:
+                pip_reqs = [
+                    "mlflow>=2.9.0",
+                    "pandas>=2.0.0",
+                    "scikit-learn>=1.0.0",
+                ]
+            
+            # Log model using PicklePyFunc wrapper
+            model_info = mlflow.pyfunc.log_model(
                 artifact_path="model",
-                code_paths=[inference_py],
-                artifacts={
-                    "model_file": model_pkl,
-                    "metadata_file": metadata_json
-                },
-                pip_requirements=requirements_txt,
-                python_model=mlflow.pyfunc.PythonModel(),
+                python_model=_create_pickle_pyfunc(),
+                artifacts={"model_pkl": str(model_pkl)},
+                pip_requirements=pip_reqs,
+                signature=signature,
                 registered_model_name=model_name
             )
             
-            logger.info(f"Successfully logged model to MLflow")
+            logger.info(f"Successfully logged model to MLflow: {model_info.model_uri}")
         
         send_progress(request_id, 'api', 'Updating model description...', progress_queues, progress=75)
         model_data = update_model_description(model_name, model_description)
@@ -474,13 +527,11 @@ def register_model_handler(request, progress_queues):
             print('html upload result', html_upload_result)
             print('pdf upload result', pdf_upload_result)
     
-            # Extract commit keys and paths for attachments
             html_commit = html_upload_result.get("key")
             pdf_commit = pdf_upload_result.get("key")
             html_filename = html_upload_result.get("path")
             pdf_filename = pdf_upload_result.get("path")
     
-            # Attach reports to governance bundle
             html_attachment = attach_report_to_bundle(bundle_id, html_filename, html_commit)
             pdf_attachment = attach_report_to_bundle(bundle_id, pdf_filename, pdf_commit)
     
