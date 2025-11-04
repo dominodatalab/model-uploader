@@ -41,11 +41,16 @@ async function proxyFetch(apiPath, options = {}) {
 
 // Handle file upload
 function handleFileUpload(event) {
-    const files = Array.from(event.target.files);
-    appState.uploadedFiles = files;
+    const files = Array.from(event.target.files)
+        .filter(file => {
+            const name = file.webkitRelativePath || file.name;
+            return !name.split('/').some(part => part.startsWith('.'));
+        });
     
+    appState.uploadedFiles = files;
     displayUploadedFiles();
 }
+
 
 // Display uploaded files
 function displayUploadedFiles() {

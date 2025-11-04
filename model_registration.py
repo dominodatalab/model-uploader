@@ -22,6 +22,9 @@ from mlflow.models.signature import infer_signature
 
 from security_scan import run_semgrep_scan, summarize_semgrep, generate_html_report, generate_pdf_from_html, DEFAULT_SEMGREP_CONFIG
 
+from endpoint_registration import register_endpoint
+
+
 logger = logging.getLogger(__name__)
 
 DOMINO_DOMAIN = os.environ.get("DOMINO_DOMAIN", "se-demo.domino.tech")
@@ -601,6 +604,11 @@ def register_model_handler(request, progress_queues):
         policy_submission_result = submit_artifacts_to_policy(bundle_id, policy_id, matched_artifacts)
         logger.info(f"Successfully submitted {len(matched_artifacts)} artifacts to policy")
 
+        send_progress(request_id, 'endpoint', 'Registering model endpoint...', progress_queues, progress=95)
+        endpoint_data = register_endpoint(bundle_id, bundle_name, model_name, model_version)
+        endpoint_id = endpoint_data.get("id", "")
+        logger.info(f"Successfully registered endpoint: {endpoint_id}")
+
         send_progress(request_id, 'complete', 'Registration complete!', progress_queues, progress=100)
         send_progress(request_id, 'done', '', progress_queues, progress=100)
         
@@ -621,6 +629,7 @@ def register_model_handler(request, progress_queues):
                 "file_count": len(saved_files),
                 "bundle_id": bundle_id,
                 "bundle_name": bundle_data.get("name"),
+                "endpoint_id": endpoint_id,
                 "experiment_url": experiment_url,
                 "experiment_run_url": experiment_run_url,
                 "model_artifacts_url": model_artifacts_url,
@@ -657,3 +666,9 @@ def register_model_handler(request, progress_queues):
             "status": "error",
             "message": f"Failed to register model: {str(e)}"
         }), 500
+
+
+
+
+
+
