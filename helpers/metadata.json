@@ -1,9 +1,9 @@
 {
-  "model_name": "market_regime_classifier",
-  "version": "6",
+  "model_name": "regime_classifier3",
+  "version": "1",
   "description": "Market regime classification model that predicts Bull, Bear, Sideways, or High Volatility conditions",
-  "mlflow_run_id": "9fb8177532ef4070a29510eb07522778",
-  "training_date": "2025-11-03T20:21:04Z",
+  "mlflow_run_id": "b33b67693c60418a944bf7b79a41024e",
+  "training_date": "2025-11-04T21:09:33Z",
   "metrics": {
     "accuracy": 1.0,
     "f1_score": 1.0

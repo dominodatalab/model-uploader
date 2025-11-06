@@ -346,7 +346,10 @@ def register_model_handler(request, progress_queues):
         policy_id = POLICY_IDS_LIST[0] if POLICY_IDS_LIST else ""
         send_progress(request_id, 'policy', 'Retrieving policy details...', progress_queues, progress=5)
         policy_data = get_policy_details(policy_id)
-        
+        print('-'*80)
+        print('policy data')
+        print(policy_data)
+        print('-'*80)
         files = request.files.getlist('files')
         temp_dir = tempfile.mkdtemp(prefix=f"external_model_{model_name}_")
         logger.info(f"Created temp directory: {temp_dir}")
@@ -358,8 +361,6 @@ def register_model_handler(request, progress_queues):
         
         file_status = {}
         model_pkl = None
-        metadata_json = None
-        requirements_txt = None
         signature_pkl = None
 
         list_the_file_names_and_sizes = ''
@@ -374,10 +375,6 @@ def register_model_handler(request, progress_queues):
 
             if filename == "model.pkl":
                 model_pkl = filepath
-            elif filename == "metadata.json":
-                metadata_json = filepath
-            elif filename == "requirements.txt":
-                requirements_txt = filepath
             elif filename == "signature.pkl":
                 signature_pkl = filepath
 
@@ -483,23 +480,13 @@ def register_model_handler(request, progress_queues):
                 else:
                     y_sample = loaded_model.predict(X_sample)
                 signature = infer_signature(X_sample, y_sample)
-                
-            # Prepare pip requirements
-            if requirements_txt:
-                pip_reqs = requirements_txt
-            else:
-                pip_reqs = [
-                    "mlflow>=2.9.0",
-                    "pandas>=2.0.0",
-                    "scikit-learn>=1.0.0",
-                ]
-            
+                            
             # Log model using PicklePyFunc wrapper
             model_info = mlflow.pyfunc.log_model(
                 artifact_path="model",
                 python_model=_create_pickle_pyfunc(),
                 artifacts={"model_pkl": str(model_pkl)},
-                pip_requirements=pip_reqs,
+                pip_requirements=[],
                 signature=signature,
                 registered_model_name=model_name
             )
@@ -521,6 +508,10 @@ def register_model_handler(request, progress_queues):
         stage = bundle_data.get("stage", "").lower().replace(" ", "-")
         html_remote_path = f"security_scans/{bundle_name}_security_report.html"
         pdf_remote_path = f"security_scans/{bundle_name}_security_report.pdf"
+        print('-'*80)
+        print('bundle data')
+        print(bundle_data)
+        print('-'*80)
 
         try:
             html_upload_result = upload_file_to_project(DOMINO_PROJECT_ID, str(security_report_html_path), html_remote_path)
@@ -607,6 +598,8 @@ def register_model_handler(request, progress_queues):
         send_progress(request_id, 'endpoint', 'Registering model endpoint...', progress_queues, progress=95)
         endpoint_data = register_endpoint(bundle_id, bundle_name, model_name, model_version)
         endpoint_id = endpoint_data.get("id", "")
+        endpoint_url = f"https://{domain}/models/{endpoint_id}/overview"
+
         logger.info(f"Successfully registered endpoint: {endpoint_id}")
 
         send_progress(request_id, 'complete', 'Registration complete!', progress_queues, progress=100)
@@ -630,6 +623,7 @@ def register_model_handler(request, progress_queues):
                 "bundle_id": bundle_id,
                 "bundle_name": bundle_data.get("name"),
                 "endpoint_id": endpoint_id,
+                "endpoint_url": endpoint_url,
                 "experiment_url": experiment_url,
                 "experiment_run_url": experiment_run_url,
                 "model_artifacts_url": model_artifacts_url,
@@ -666,9 +660,6 @@ def register_model_handler(request, progress_queues):
             "status": "error",
             "message": f"Failed to register model: {str(e)}"
         }), 500
-
-
-
 
 
 

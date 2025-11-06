@@ -223,9 +223,9 @@ function showSuccess(result) {
         <div class="model-links">
             <h4>Quick Links:</h4>
             <div class="link-buttons-grid">
-                ${result.data.bundle_url ? `
+                ${result.data.security_scan_url ? `
                     <a href="${result.data.security_scan_url}" target="_blank" rel="noopener noreferrer" class="link-button">
-                        <i class="icon fas fa-clipboard-list"></i>
+                        <i class="icon fas fa-shield-halved"></i>
                         <span>Security Scan</span>
                         <i class="external-icon fas fa-external-link-alt"></i>
                     </a>
@@ -234,6 +234,13 @@ function showSuccess(result) {
                     <a href="${result.data.bundle_url}" target="_blank" rel="noopener noreferrer" class="link-button">
                         <i class="icon fas fa-clipboard-list"></i>
                         <span>Intake Bundle</span>
+                        <i class="external-icon fas fa-external-link-alt"></i>
+                    </a>
+                ` : ''}
+                ${result.data.endpoint_url ? `
+                    <a href="${result.data.endpoint_url}" target="_blank" rel="noopener noreferrer" class="link-button">
+                        <i class="icon fas fa-plug"></i>
+                        <span>REST Endpoint</span>
                         <i class="external-icon fas fa-external-link-alt"></i>
                     </a>
                 ` : ''}
@@ -344,12 +351,6 @@ function showSuccess(result) {
                 <span class="status-label">Status:</span>
                 <span class="status-value" style="color: ${statusColor}; font-weight: bold;">${statusText}</span>
             </div>
-            ${result.message ? `
-                <div class="message-line">
-                    <span class="message-label">Message:</span>
-                    <span class="message-value">${result.message}</span>
-                </div>
-            ` : ''}
             ${linksHtml}
             ${infoHtml}
         </div>

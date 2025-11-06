@@ -1,6 +1,7 @@
 """
 Market Regime Classification: Train and Register to MLflow
 Combines model training with MLflow registration in a single pipeline.
+Now includes saving training data and ground truth for model monitoring.
 """
 import argparse
 import json
@@ -63,7 +64,7 @@ def generate_synthetic_data(n_samples=5000, random_state=42):
 
 
 def train_model(df):
-    """Train RandomForest classifier and return model with metrics and signature."""
+    """Train RandomForest classifier and return model with metrics, signature, and splits."""
     X = df[['returns', 'volatility', 'volume_ratio']]
     y = df['regime']
     
@@ -96,7 +97,53 @@ def train_model(df):
         target_names=['Bull', 'Bear', 'Sideways', 'High Vol']
     ))
     
-    return model, signature, accuracy, f1
+    # Return splits for saving
+    return model, signature, accuracy, f1, X_train, X_test, y_train, y_test
+
+
+def save_monitoring_data(X_train, y_train, X_test, y_test, output_dir="monitoring_data"):
+    """
+    Save training data and ground truth for Domino model monitoring.
+    
+    Training Data: Features + target used to train the model
+    Ground Truth: Test set with actual labels (simulates future ground truth)
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(exist_ok=True)
+    
+    # Save training data (features + target)
+    training_data = X_train.copy()
+    training_data['regime'] = y_train.values
+    training_path = output_dir / "training_data.csv"
+    training_data.to_csv(training_path, index=False)
+    print(f"✓ Saved training data: {training_path} ({len(training_data)} rows)")
+    
+    # Save ground truth (test set with actual labels)
+    # This simulates what you'd get from actual outcomes
+    ground_truth = X_test.copy()
+    ground_truth['regime'] = y_test.values
+    ground_truth_path = output_dir / "ground_truth.csv"
+    ground_truth.to_csv(ground_truth_path, index=False)
+    print(f"✓ Saved ground truth: {ground_truth_path} ({len(ground_truth)} rows)")
+    
+    # Save schema info
+    schema = {
+        "features": list(X_train.columns),
+        "target": "regime",
+        "model_type": "classification",
+        "classes": {
+            "0": "Bull Market",
+            "1": "Bear Market", 
+            "2": "Sideways Market",
+            "3": "High Volatility"
+        }
+    }
+    schema_path = output_dir / "schema.json"
+    with open(schema_path, 'w') as f:
+        json.dump(schema, f, indent=2)
+    print(f"✓ Saved schema: {schema_path}")
+    
+    return training_path, ground_truth_path, schema_path
 
 
 def save_artifacts(model, signature, output_dir="artifacts"):
@@ -202,6 +249,7 @@ def main():
     parser.add_argument("--experiment", default=None, help="MLflow experiment name")
     parser.add_argument("--samples", type=int, default=5000, help="Number of training samples")
     parser.add_argument("--output-dir", default="artifacts", help="Output directory for artifacts")
+    parser.add_argument("--monitoring-dir", default="monitoring_data", help="Output directory for monitoring data")
     args = parser.parse_args()
     
     print("=" * 60)
@@ -214,10 +262,16 @@ def main():
     print(f"   Generated {len(df)} samples")
     
     print("\n2. Training model...")
-    model, signature, accuracy, f1 = train_model(df)
+    model, signature, accuracy, f1, X_train, X_test, y_train, y_test = train_model(df)
+    
+    # Save monitoring data
+    print("\n3. Saving monitoring data...")
+    training_path, ground_truth_path, schema_path = save_monitoring_data(
+        X_train, y_train, X_test, y_test, args.monitoring_dir
+    )
     
     # Save artifacts including signature
-    print("\n3. Saving artifacts...")
+    print("\n4. Saving model artifacts...")
     pkl_path, sig_path = save_artifacts(model, signature, args.output_dir)
     
     # Prepare model parameters for logging
@@ -228,7 +282,7 @@ def main():
     }
     
     # Register to MLflow
-    print("\n4. Registering to MLflow...")
+    print("\n5. Registering to MLflow...")
     mv = register_to_mlflow(
         pkl_path, sig_path, model_params, args.name,
         experiment=args.experiment,
@@ -240,6 +294,10 @@ def main():
     print("✓ Complete!")
     print(f"  Model: {mv.name} v{mv.version}")
     print(f"  Status: {mv.status}")
+    print(f"\n  Monitoring Data:")
+    print(f"    Training: {training_path}")
+    print(f"    Ground Truth: {ground_truth_path}")
+    print(f"    Schema: {schema_path}")
     print("=" * 60)
 
 

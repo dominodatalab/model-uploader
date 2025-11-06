@@ -1,0 +1,15 @@
+{
+  "features": [
+    "returns",
+    "volatility",
+    "volume_ratio"
+  ],
+  "target": "regime",
+  "model_type": "classification",
+  "classes": {
+    "0": "Bull Market",
+    "1": "Bear Market",
+    "2": "Sideways Market",
+    "3": "High Volatility"
+  }
+}
