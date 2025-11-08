@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 DOMINO_DOMAIN = os.environ.get("DOMINO_DOMAIN", "se-demo.domino.tech")
 DOMINO_API_KEY = os.environ.get("DOMINO_USER_API_KEY", "")
-POLICY_IDS_STRING = os.environ.get("POLICY_IDS", "42c9adf3-f233-470b-b186-107496d0eb05, 79ca4d72-83ca-4780-8162-899f0dc19d9e, ")
+POLICY_IDS_STRING = os.environ.get("POLICY_IDS", "79ca4d72-83ca-4780-8162-899f0dc19d9e, ")
 POLICY_IDS_LIST = [s.strip() for s in POLICY_IDS_STRING.split(',')]
 DOMINO_PROJECT_ID = os.environ.get("DOMINO_PROJECT_ID", "")
 
