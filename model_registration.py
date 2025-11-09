@@ -33,6 +33,7 @@ POLICY_IDS_STRING = os.environ.get("POLICY_IDS", "79ca4d72-83ca-4780-8162-899f0d
 POLICY_IDS_LIST = [s.strip() for s in POLICY_IDS_STRING.split(',')]
 DOMINO_PROJECT_ID = os.environ.get("DOMINO_PROJECT_ID", "")
 
+print('POLICY_IDS_LIST', POLICY_IDS_LIST)
 
 def domino_short_id(length: int = 8) -> str:
     """Generate a short ID based on Domino user and project."""
@@ -596,8 +597,13 @@ def register_model_handler(request, progress_queues):
         logger.info(f"Successfully submitted {len(matched_artifacts)} artifacts to policy")
 
         send_progress(request_id, 'endpoint', 'Registering model endpoint...', progress_queues, progress=95)
-        endpoint_data = register_endpoint(bundle_id, bundle_name, model_name, model_version)
-        endpoint_id = endpoint_data.get("id", "")
+        try:
+            
+            endpoint_data = register_endpoint(bundle_id, bundle_name, model_name, model_version)
+            endpoint_id = endpoint_data.get("id", "")
+        except Exception as e:
+            print('no endpoint created')
+            endpoint_id = 'no-endpoint-created'
         endpoint_url = f"https://{domain}/models/{endpoint_id}/overview"
 
         logger.info(f"Successfully registered endpoint: {endpoint_id}")
