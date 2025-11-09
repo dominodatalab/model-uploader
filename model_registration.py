@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 DOMINO_DOMAIN = os.environ.get("DOMINO_DOMAIN", "se-demo.domino.tech")
 DOMINO_API_KEY = os.environ.get("DOMINO_USER_API_KEY", "")
-POLICY_IDS_STRING = os.environ.get("POLICY_IDS", "79ca4d72-83ca-4780-8162-899f0dc19d9e, ")
+POLICY_IDS_STRING = os.environ.get("POLICY_IDS", "42c9adf3-f233-470b-b186-107496d0eb05, ")
 POLICY_IDS_LIST = [s.strip() for s in POLICY_IDS_STRING.split(',')]
 DOMINO_PROJECT_ID = os.environ.get("DOMINO_PROJECT_ID", "")
 
@@ -542,7 +542,9 @@ def register_model_handler(request, progress_queues):
         model_card_url = f"https://{domain}/u/{project_owner}/{project_name}/model-registry/{model_name}/model-card?version={model_version}"
         bundle_url = f"https://{domain}/u/{project_owner}/{project_name}/governance/bundle/{bundle_id}/policy/{policy_id}/evidence/stage/{stage}"
         security_scan_url = f"https://{domain}/u/{project_owner}/{project_name}/view-file/{html_remote_path}"
-
+        executive_summary = f"Executive Summary: {model_description}"
+        does_this_model_use_thirdparty_components_or_services = True
+        ai_classification_level = 2
         were_all_the_files_uploaded = True
         
         evidence_variables = {
@@ -554,7 +556,11 @@ def register_model_handler(request, progress_queues):
             'model_environment_id': model_environment_id,
             'model_execution_script': model_execution_script,
             'list_the_file_names_and_sizes': list_the_file_names_and_sizes,
-            'were_all_files_uploaded': were_all_the_files_uploaded
+            'were_all_files_uploaded': were_all_the_files_uploaded,
+            'does_this_model_use_thirdparty_components_or_services': does_this_model_use_thirdparty_components_or_services,
+            'ai_classification_level': ai_classification_level,
+            'executive_summary': executive_summary,
+            'model_version': model_version
         }
                 
         stages = policy_data.get("stages", [])
