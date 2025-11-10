@@ -190,6 +190,45 @@ def normalize_label(label: str) -> str:
     return normalized
 
 
+def search_policy_overviews(search_term: str, limit: int = 10, offset: int = 0) -> dict:
+    """
+    Search Domino Governance Policy Overviews by keyword and return the first non-archived policy.
+    """
+    domain = DOMINO_DOMAIN.removeprefix("https://").removeprefix("http://")
+    url = f"https://{domain}/api/governance/v1/policy-overviews"
+    headers = {
+        "accept": "application/json",
+        "X-Domino-Api-Key": DOMINO_API_KEY
+    }
+    params = {
+        "search": search_term,
+        "limit": limit,
+        "offset": offset
+    }
+
+    try:
+        logger.info(f"Searching policy overviews for term: {search_term}")
+        response = requests.get(url, headers=headers, params=params, timeout=30)
+        response.raise_for_status()
+        result = response.json()
+
+        # Filter out archived or invalid entries
+        policies = result.get("data", [])
+        active_policies = [p for p in policies if not p.get("archived", False)]
+
+        if not active_policies:
+            logger.warning(f"No active (non-archived) policies found for search term '{search_term}'")
+            return {}
+
+        first_policy = active_policies[0]
+        logger.info(f"Found policy: {first_policy.get('name')} (status={first_policy.get('status')})")
+        return first_policy
+
+    except requests.RequestException as e:
+        logger.error(f"Failed to search policy overviews: {e}")
+        raise
+
+
 def get_policy_details(policy_id: str) -> dict:
     """Get policy details including classification artifact map."""
     domain = DOMINO_DOMAIN.removeprefix("https://").removeprefix("http://")
@@ -339,12 +378,20 @@ def register_model_handler(request, progress_queues):
         model_usage_pattern = request.form.get("modelUsagePattern")
         model_environment_id = request.form.get("modelEnvironmentId")
         model_execution_script = request.form.get("modelExecutionScript", "")
-        
-        required_fields = [model_name, model_owner, model_use_case, model_usage_pattern, model_environment_id]
+        policy_name = request.form.get("policyName", "")
+        print('-'*80)
+        print(policy_name)
+
+        required_fields = [model_name, model_owner, model_use_case, model_usage_pattern, model_environment_id, policy_name]
         if not all(required_fields):
             return jsonify({"status": "error", "message": "Missing required fields"}), 400
-        
-        policy_id = POLICY_IDS_LIST[0] if POLICY_IDS_LIST else ""
+
+        policy_overview = search_policy_overviews(policy_name)
+        if 'id' in policy_overview.keys():
+            policy_id = policy_overview.get('id')
+        else:
+            return jsonify({"status": "error", "message": "No matching Policy Name found."}), 400
+
         send_progress(request_id, 'policy', 'Retrieving policy details...', progress_queues, progress=5)
         policy_data = get_policy_details(policy_id)
         print('-'*80)
@@ -505,11 +552,11 @@ def register_model_handler(request, progress_queues):
         project_owner = bundle_data.get("projectOwner", "")
         project_name = bundle_data.get("projectName", "")
         project_id = bundle_data.get("projectId", "")
-        policy_name = bundle_data.get("policyName", "")
         stage = bundle_data.get("stage", "").lower().replace(" ", "-")
         html_remote_path = f"security_scans/{bundle_name}_security_report.html"
         pdf_remote_path = f"security_scans/{bundle_name}_security_report.pdf"
         print('-'*80)
+
         print('bundle data')
         print(bundle_data)
         print('-'*80)

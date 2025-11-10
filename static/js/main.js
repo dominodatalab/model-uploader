@@ -422,6 +422,7 @@ async function handleSubmit(event) {
         formData.append('modelUsagePattern', document.getElementById('model-usage-pattern').value.trim());
         formData.append('modelEnvironmentId', document.getElementById('model-environment-id').value.trim());
         formData.append('modelExecutionScript', document.getElementById('model-execution-script').value.trim());
+        formData.append('policyName', document.getElementById('policy-name').value.trim());
         
         // Append files
         appState.uploadedFiles.forEach(file => {
@@ -497,6 +498,11 @@ function initializeForm() {
                         <div class="form-group">
                             <label for="model-execution-script">Model Execution Script</label>
                             <input type="text" id="model-execution-script" name="modelExecutionScript" placeholder="app.sh">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="policy-name">Policy Name</label>
+                            <input type="text" id="policy-name" name="policyName" value="Standard Model Pilot [d2]">
                         </div>
                     </div>
                     
